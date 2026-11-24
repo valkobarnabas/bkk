@@ -1,0 +1,69 @@
+﻿# BKK-style stop posters for Madison Metro
+
+Generates Budapest (BKK) style stop posters, a line diagram with ride times,
+transfers with walking distances, and a departure table, for **any stop and
+route combination** in the bundled GTFS data. The same JavaScript runs in the
+browser (GitHub Pages, no server) and in Node (command line).
+
+## Web
+
+Publish the `bkk-github` folder with GitHub Pages (a `.nojekyll` file is
+included). Open `index.html`, search for a stop (number or name), tick the
+routes, and press *Generate poster*. Each poster can be printed / saved as PDF
+(page size is set automatically), or downloaded as SVG or HTML. Links like
+`index.html?stop=0532&route=28,38` open straight to a poster
+(`&merge=0` and `&school=1` are also understood).
+
+To try it locally: `python -m http.server` in this folder, then open
+http://localhost:8000.
+
+## Command line
+
+```
+node cli.js --stop 0532 --route 28
+node cli.js --stop 0532 --route 28,38,80 --out posters --format svg,pdf
+node cli.js --search "linden at babcock"
+node cli.js --stop 0532 --routes          # list the routes at a stop
+```
+
+Options: `--letter` (force a US Letter page, see below), `--landscape` (letter, but landscape), `--plain-transfers` (list every transfer route with no "+" or walking distances, outline the ones not at the stop in black, and replace the walking row in the key with a boxed "near"; also a checkbox on the page), `--no-merge`, `--school`, `--format svg,html,pdf`, `--out DIR`,
+`--cols N`, `--height PT`, `--data DIR`. PDF output uses headless Edge or Chrome
+(set `BKK_BROWSER` to point at another browser). No npm packages are needed.
+
+## How it works
+
+| File | Job |
+| --- | --- |
+| `js/served.js` | Copy of the stops-served logic from `metrotransit-main` (patterns, transfers, close termini, minute ordering). |
+| `js/adapter.js` | GTFS adapter. Turns a stop plus routes into a poster description: destinations (grouped by destination sign), day-type time blocks, stops after this one with minutes-from-here, nearby transfers (within 250 ft, distance rounded up to 10 ft), side branches and merge clusters. |
+| `js/poster-core.js` | Renderer. Lays everything out and writes an SVG. Text is measured with the bundled font metrics, so the browser and Node produce identical layouts. |
+| `js/search.js` | Stop search, taken from `hybrid.js`. |
+| `js/app.js`, `index.html` | The web page. |
+| `cli.js` | Terminal wrapper. |
+
+### What it handles
+
+* **One, two, three or more destinations.** Each destination gets its own band (tinted with the route colour) and time blocks; the header shows the main destination large and the others beneath it.
+* **Any number of stops.** Long routes split into several diagram columns without breaking a side branch. Stops that only some trips serve become a side-lane spur (when the branch ends in a terminal) or a lettered marker with a legend (when it rejoins).
+* **Any amount of times.** The tables flow into one or two columns, and the page grows (taller, then wider) until everything fits at a comfortable size. Page sizes run from letter up to about 16 x 14 in.
+* **US Letter only.** `--letter` (or the checkbox on the page) always outputs an 8.5 x 11 in sheet. It stays portrait (landscape is only used if a poster would have to shrink below 50% to stand upright, which never happens with the current data). When turning the sheet sideways would print larger, the poster card shows a "Rotate to landscape (N% instead of M%)" button (and the CLI prints a hint; use `--landscape`). Roughly a quarter of posters get this offer. Posters that do not fit are shrunk, so type gets smaller: about 46% of posters print at 85% or larger, and the worst (83-stop D hubs, route 80, some route 2xxx stops) print at about 55%.
+* **Long names.** Stop names wrap, then shrink; transfer rows wrap.
+* **Route colours.** Taken from the data, with a fallback table for the colours you specified (red A, green B, navy C/D/F/G/H/P/R, blue E/J/O/S/80, light blue L/W/28/38/55/65/75/81/82/84).
+* **Merging.** Routes at the stop are merged when their remaining stop sets overlap (Jaccard similarity of at least 0.6, at least two shared stops, at most six routes). Different directions of one route never merge, and neither do numbered variants such as A1 and A2, which each get their own poster. Use `--no-merge` or untick the box to get one poster per route.
+
+### Data
+
+`data/pack.json.gz` and `data/served.json.gz` are the files produced by
+`metrotransit-main/build-data.js` for feed `S072_202608240858`
+(valid 2026-08-16 to 2026-12-05). Replace them with a fresh build to update the
+posters. The previous-calendar archive is not used.
+
+### Fonts
+
+`fonts/` holds subsets of Fira Sans (SIL OFL) and Share Tech Mono (SIL OFL). Rebuild them and `js/font-metrics.js` with `python tools/build-fonts.py`
+(needs `fonttools` and `brotli`).
+
+The older Python/reportlab generator (`other claude/poster_gen.py`) is untouched
+and is no longer needed: it cannot run on a static page.
+
+Merged posters keep one time band per route (D1, R1, 55, ...), labelled with the poster code. Only routes 28 and 38 share a band when they go to the same destination.

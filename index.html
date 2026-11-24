@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Stop poster generator: BKK-style Metro Transit posters</title>
+  <link rel="icon" type="image/png" href="data/metrologo-mark.png" />
+  <link rel="apple-touch-icon" href="data/metrologo-mark.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="bkk-page">
+  <nav class="site-nav">
+    <a class="brand" href="index.html" aria-current="page"><img src="data/metrologo-mark.png" alt="" /> Stop poster generator</a>
+  </nav>
+
+  <main class="box">
+    <h1>Stop poster generator</h1>
+    <p class="lead">
+      Budapest-style (BKK) stop posters for any Madison Metro stop: a line diagram with ride times,
+      transfers and a departure table. Routes that serve the same stops from here can share one poster.
+    </p>
+
+    <label class="field">
+      <span>Stop</span>
+      <input id="q" type="search" autocomplete="off" placeholder="0532 or Linden at Babcock" disabled />
+    </label>
+    <div id="results" class="results" hidden></div>
+
+    <section id="picked" class="picked" hidden>
+      <div class="picked-name" id="picked-name"></div>
+      <div class="picked-meta" id="picked-meta"></div>
+
+      <div class="row">
+        <label class="check"><input type="checkbox" id="noschool" checked /> Exclude school extras</label>
+        <label class="check"><input type="checkbox" id="merge" checked /> Merge routes that share stops</label>
+        <label class="check"><input type="checkbox" id="letter" /> Fit on one US Letter page (shrinks big posters)</label>
+        <label class="check"><input type="checkbox" id="plain" /> Plain transfers: list every transfer route, no "+" or walking distances</label>
+      </div>
+      <div id="routes" class="routes"></div>
+
+      <button type="button" id="go">Generate poster</button>
+    </section>
+    <p id="err" class="err" hidden></p>
+  </main>
+
+  <section id="out" class="out bkk-out" hidden></section>
+
+  <footer class="site-foot">
+    <span id="foot-data">(c) Barnabás Valkó 2026.</span>
+  </footer>
+  <script src="js/font-metrics.js"></script>
+  <script src="js/served.js"></script>
+  <script src="js/adapter.js"></script>
+  <script src="js/search.js"></script>
+  <script src="js/poster-core.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
