@@ -40,9 +40,12 @@
   const LETTER_W = 612; // US Letter, points
   const LETTER_H = 792;
   const M = 28; // page margin
-  const COL_W = 238; // diagram column width
-  const COL_PITCH = COL_W + 16;
-  const RW = 294; // time-table column width
+  const COL_W0 = 238; // diagram column width (default)
+  const RW0 = 294; // time-table column width (default)
+  const COL_PITCH0 = () => COL_W0 + 16;
+  let COL_W = COL_W0; // current widths: see setGeo()
+  let COL_PITCH = COL_W + 16;
+  let RW = RW0;
   const LINE_REL = 34; // route line x, relative to the column
   const SPUR_REL = LINE_REL + 26;
   const FOOT_TOP = M + 2 + 64; // top of the footer boxes
@@ -101,6 +104,24 @@
     return lines;
   }
 
+  /** Stop names: when a name must wrap, break right after "at" ("Junction at / Park And Ride")
+   *  instead of mid-way through the cross street, as long as that costs no extra lines. */
+  function wrapName(text, font, size, maxW, maxLines) {
+    const plain = wrapText(text, font, size, maxW, maxLines);
+    if (plain.length < 2) return plain;
+    const words = String(text).split(/\s+/).filter(Boolean);
+    // try each "at" (first one first), keeping the first break that fits
+    for (let i = 1; i < words.length - 1; i++) {
+      if (!/^at$/i.test(words[i])) continue;
+      const head = words.slice(0, i + 1).join(" ");
+      if (sw(head, font, size) > maxW) continue;
+      const rest = wrapText(words.slice(i + 1).join(" "), font, size, maxW);
+      const cand = [head, ...rest];
+      if (cand.length <= plain.length) return maxLines && cand.length > maxLines ? plain : cand;
+    }
+    return plain;
+  }
+
   function ellipsize(text, font, size, maxW) {
     let t = String(text);
     if (sw(t, font, size) <= maxW) return t;
@@ -146,6 +167,7 @@
       s += ` fill="${o.fill || "none"}"`;
       if (o.stroke) s += ` stroke="${o.stroke}" stroke-width="${o.sw == null ? 1 : o.sw}"`;
       if (o.cap) s += ` stroke-linecap="${o.cap}"`;
+      if (o.dash) s += ` stroke-dasharray="${o.dash}"`;
       return s;
     }
     rect(x, y, w, h, o = {}) {
@@ -183,13 +205,17 @@
   }
 
   // ------------------------------------------------------------ primitives
+  const NEAR_PAD = 0.55; // outline of a "near" transfer sits this far outside the square
+  const NEAR_DASH = "2.1 1.15";
   const badgeW = (label, fs = 7.6) => Math.max(sw(label, "F-Bold", fs) + 4.4, 11.5);
 
   function badge(d, x, y, r, h = 10.5, fs = 7.6) {
     const label = r.n;
     const w = badgeW(label, fs);
-    // plain-transfers mode: a black outline marks routes that are not at this stop
-    d.rect(x, y - h / 2, w, h, r.near ? { fill: r.c, stroke: BLACK, sw: 1.1 } : { fill: r.c });
+    // plain-transfers mode: a dashed black outline, just outside the square (so it
+    // shows up on navy routes too), marks routes that are not at this stop
+    if (r.near) d.rect(x - NEAR_PAD, y - h / 2 - NEAR_PAD, w + 2 * NEAR_PAD, h + 2 * NEAR_PAD, { stroke: BLACK, sw: 0.95, dash: NEAR_DASH });
+    d.rect(x, y - h / 2, w, h, { fill: r.c });
     d.text(x + w / 2, y - fs * 0.35, label, "F-Bold", fs, r.t || WHITE, { anchor: "middle" });
     return x + w + 1.8;
   }
@@ -241,7 +267,7 @@
         x += plus;
       }
       g.routes.forEach((r, ri) => {
-        const bw = badgeW(r.n) + 1.8;
+        const bw = badgeW(r.n) + 1.8 + (r.near ? 1.2 : 0);
         const last = ri === g.routes.length - 1;
         const need = bw + (last && g.walk ? 11.2 + sw(`${g.walk} ft`, "F-Reg", 6.6) + 3 : 0);
         const gap = r.gap && x > x0 ? 5 : 0; // plain mode: space between at-stop and nearby routes
@@ -282,6 +308,7 @@
   const NAME_FS = 10;
   const NAME_PITCH = 11.5;
   const XFER_PITCH = 12.5;
+  const ALSO_GAP = 3.2; // extra space between a boxed terminus and its "or ..." stop
 
   /**
    * Work out what one stop needs: wrapped name lines, transfer lines, LED
@@ -298,20 +325,29 @@
     if (it.marker) idW += 11;
 
     let fs = NAME_FS;
-    let lines = wrapText(it.name, font, fs, xmax - nx - idW);
+    let lines = wrapName(it.name, font, fs, xmax - nx - idW);
     while ((lines.length > 2 || lines.some((l) => sw(l, font, fs) > xmax - nx - idW)) && fs > 8.5) {
       fs -= 0.5;
-      lines = wrapText(it.name, font, fs, xmax - nx - idW);
+      lines = wrapName(it.name, font, fs, xmax - nx - idW);
     }
-    if (lines.length > 3) lines = wrapText(it.name, font, fs, xmax - nx - idW, 3);
+    if (lines.length > 3) lines = wrapName(it.name, font, fs, xmax - nx - idW, 3);
     lines = lines.map((l) => ellipsize(l, font, fs, xmax - nx - (l === lines[lines.length - 1] ? idW : 0)));
 
     const also = [];
     for (const a of it.also || []) {
-      const t = ellipsize(`or ${a.name}`, "F-Semi", 8.6, xmax - nx - sw(`#${a.id}`, "F-Reg", 6.4) - 4);
-      also.push({ text: t, id: a.id });
+      // wraps onto a second line rather than being cut off; the id follows the last line
+      const room = xmax - nx - sw(`#${a.id}`, "F-Reg", 6.4) - 4;
+      const ls = wrapName(`or ${a.name}`, "F-Semi", 8.6, room, 2);
+      ls.forEach((text, li) => also.push({ text, id: li === ls.length - 1 ? a.id : null }));
     }
-    const nameLines = lines.length + also.length;
+    // when trips end at the other stop: small italic lines right under it (3/4 line each)
+    let nameLines = lines.length + also.length + (also.length ? ALSO_GAP / NAME_PITCH : 0);
+    if (also.length && it.alsoWhen) {
+      for (const l of wrapText(it.alsoWhen, "F-Ital", 7, xmax - nx, 2)) {
+        also.push({ text: l, sub: true });
+        nameLines += 0.72;
+      }
+    }
 
     // transfers, then chips
     const xf = it.groups && it.groups.length ? layoutTransfers(it.groups, nx, xmax) : null;
@@ -515,7 +551,7 @@
   const DAY_H = 23;
   const BGAP = 8;
   const DGAP = 16;
-  const TCOL_PITCH = RW + 16;
+  let TCOL_PITCH = RW + 16;
 
   function legendHeight(cfg) {
     return (cfg.plainTransfers ? 70 : 92) + 17 * (cfg.markers ? cfg.markers.length : 0);
@@ -738,10 +774,10 @@
     while (sw(cfg.stopName, "F-Bold", fs) > avail && fs > 10.5) fs -= 0.5;
     if (sw(cfg.stopName, "F-Bold", fs) <= avail) return { fs, lines: [cfg.stopName], h: 40 };
     let f = 11.5;
-    let lines = wrapText(cfg.stopName, "F-Bold", f, avail);
+    let lines = wrapName(cfg.stopName, "F-Bold", f, avail);
     while (lines.length > 2 && f > 9) {
       f -= 0.5;
-      lines = wrapText(cfg.stopName, "F-Bold", f, avail);
+      lines = wrapName(cfg.stopName, "F-Bold", f, avail);
     }
     lines = lines.slice(0, 2).map((l) => ellipsize(l, "F-Bold", f, avail));
     return { fs: f, lines, h: lines.length > 1 ? 52 : 40 };
@@ -774,56 +810,120 @@
     return { ...cfg, items, plainTransfers: true };
   }
 
+  // Column widths are fixed at their defaults, except when a poster is fitted
+  // onto a letter sheet: then the columns are squeezed (or stretched a little)
+  // so the page has exactly the shape of the sheet.
+  function setGeo(g) {
+    COL_W = g ? g.colW : COL_W0;
+    RW = g ? g.rw : RW0;
+    COL_PITCH = COL_W + 16;
+    TCOL_PITCH = RW + 16;
+  }
+
+  const FIT_LIMITS = { colMin: 168, colMax: 260, rwMin: 200, rwMax: 340 };
+  /** Column widths that fill a page `Wb` wide with nc diagram and tc table columns. */
+  function fitGeo(Wb, nc, tc, lim) {
+    const sum = Wb - 2 * M + 24 - 16 * (nc + tc); // nc * colW + tc * rw
+    const f = sum / (nc * COL_W0 + tc * RW0);
+    let colW = COL_W0 * f;
+    let rw = RW0 * f;
+    if (colW < lim.colMin) {
+      colW = lim.colMin;
+      rw = (sum - nc * colW) / tc;
+    }
+    if (rw < lim.rwMin) {
+      rw = lim.rwMin;
+      colW = (sum - tc * rw) / nc;
+    }
+    if (colW < lim.colMin - 0.01 || rw < lim.rwMin - 0.01) return null;
+    return { colW: Math.min(colW, lim.colMax), rw: Math.min(rw, lim.rwMax) };
+  }
+
+  /** Narrowest table column that still holds the key without overflowing. */
+  function legendMinWidth(cfg) {
+    const R = 8.4;
+    let w = 10 + sw("Key:", "F-Bold", 9.5) + 8 + 36 + 8 + 36 + 10;
+    if (cfg.dests.some((x) => x.blocks.some((b) => b.times.some((t) => t[2])))) w += 8 + 40 + 6 + sw("see note", "F-Reg", 7.6);
+    const rows = [10 + 52 + sw("Minutes of ride time from this stop", "F-Reg", R) + 10];
+    if (cfg.plainTransfers) {
+      rows.push(10 + 52 + sw("Transfer to routes at or", "F-Reg", R) + 4 + sw("near", "F-Reg", R) + 6 + 4 + sw("the listed stop", "F-Reg", R) + 10);
+    } else {
+      rows.push(10 + 52 + sw("Transfer to other routes at the listed stop", "F-Reg", R) + 10);
+      rows.push(10 + 52 + sw("Walk to nearby transfer opportunity", "F-Reg", R) + 10);
+    }
+    return Math.ceil(Math.max(w, ...rows));
+  }
+
+  /**
+   * Narrowest columns that show this poster's text without cutting it off:
+   * LED signs in the diagram, the stop bar's "Stop #..., on ..." line, and the
+   * heading + LED sign of each destination band.
+   */
+  function textNeeds(cfg) {
+    let col = 0;
+    for (const it of cfg.items) {
+      const nx = (it.lane ? SPUR_REL : LINE_REL) + 14;
+      for (const s of it.chips || []) col = Math.max(col, nx - 6 + ledWidth(s) + 2);
+    }
+    const sub = `Stop #${cfg.stopId}${cfg.street ? ", " + cfg.street : ""}`;
+    col = Math.max(col, LINE_REL + 14 + 8 + sw(sub, "F-Reg", 6.6));
+    let rw = 0;
+    for (const dest of cfg.dests) {
+      if (!dest.blocks.length) continue;
+      const lab = dest.direction ? `${dest.direction} towards` : "Towards";
+      let tiles = 0;
+      if (cfg.routes.length > 1) {
+        for (const rn of dest.tiles && dest.tiles.length ? dest.tiles : dest.routes) {
+          const tile = cfg.routes.find((t) => t.label === rn) || cfg.routes.find((t) => t.route === rn);
+          tiles += badgeW(tile ? tile.label : rn, 7.8) + 1.8;
+        }
+        tiles += 3;
+      }
+      rw = Math.max(rw, 10 + tiles + sw(lab, "F-Bold", 12) + 8 + ledWidth(dest.sign, 6.4, 0.5) + 8);
+    }
+    return { col: Math.ceil(col), rw: Math.ceil(rw) };
+  }
+
+  const TIGHT_GAIN = 1.03; // the tighter tier must print at least this much larger to be used
+
   function plan(cfg, opts) {
     opts = opts || {};
     cfg = withOptions(cfg, opts);
     const items = cfg.items;
-    const Ls = items.map((it, i) => measureItem(it, i === items.length - 1));
-    const bar = stopBar(cfg);
     const legH = legendHeight(cfg);
+
+    // row measurements depend on the diagram column width only
+    const measured = new Map();
+    const measure = (colW) => {
+      let m = measured.get(colW);
+      if (!m) {
+        setGeo({ colW, rw: RW0 });
+        m = { Ls: items.map((it, i) => measureItem(it, i === items.length - 1)), bar: stopBar(cfg) };
+        measured.set(colW, m);
+      }
+      return m;
+    };
 
     const dChoices = opts.cols && opts.cols !== "auto" ? [Number(opts.cols)] : [1, 2, 3];
     const tChoices = opts.tcols && opts.tcols !== "auto" ? [Number(opts.tcols)] : [1, 2];
     const fitLetter = opts.fit === "letter";
-    const heights = [];
-    if (opts.height && opts.height !== "auto") heights.push(Number(opts.height));
-    else for (let h = fitLetter ? 540 : 792; h <= 1728; h += 36) heights.push(h);
-    const cands = [];
-    for (const nc of dChoices)
-      for (const tc of tChoices)
-        for (const H of heights) {
-          const { W } = pageSize(nc, tc, H);
-          // Very tall, narrow pages are penalised so a wider page wins once the
-          // aspect ratio gets silly (e.g. 8.5 x 24 in vs 12.8 x 14 in).
-          const cost = W * H * (1 + Math.max(0, H / W - 1.7) * 0.6);
-          // Scale needed to print the page on US Letter (portrait or landscape), capped at 1.
-          const sp = Math.min(LETTER_W / W, LETTER_H / H);
-          const sl = Math.min(LETTER_H / W, LETTER_W / H);
-          cands.push({ nc, tc, H, W, area: W * H, cost, sp: Math.min(1, sp), sl: Math.min(1, sl) });
-        }
-    // Letter mode: orientation is chosen per candidate. Portrait is used unless
-    // the poster would have to shrink below PORTRAIT_MIN to stand upright.
-    // mode: "p" portrait only, "l" landscape only, "any" whichever prints larger
-    const orient = (mode) =>
-      cands
-        .map((c) => {
-          const land = mode === "l" || (mode === "any" && c.sl > c.sp);
-          return { ...c, land, scale: land ? c.sl : c.sp };
-        })
-        .sort(
-          (a, b) =>
-            Math.round(b.scale * 1000) - Math.round(a.scale * 1000) ||
-            Math.abs(LETTER_W * LETTER_H - a.area) - Math.abs(LETTER_W * LETTER_H - b.area)
-        );
-    // Normal mode: cheapest page first; on a tie prefer the narrower page.
-    if (!fitLetter) cands.sort((a, b) => a.cost - b.cost || a.W - b.W);
+    const lim = Object.assign({}, FIT_LIMITS, opts.fitLimits || {});
+    {
+      const need = textNeeds(cfg);
+      lim.rwMin = Math.max(lim.rwMin, legendMinWidth(cfg), need.rw);
+      lim.colMin = Math.max(lim.colMin, need.col);
+      lim.colMax = Math.max(lim.colMax, lim.colMin);
+      lim.rwMax = Math.max(lim.rwMax, lim.rwMin);
+    }
 
     const tiers = [
       { tau: 0.55, minFs: 11 },
       { tau: 0, minFs: 9 },
     ];
     const attempt = (cand, tier) => {
-      const { nc, tc, H } = cand;
+      const { nc, tc, H, geo } = cand;
+      const { Ls, bar } = measure(geo ? geo.colW : COL_W0);
+      setGeo(geo || null);
       const HB = H - M - 58;
       const barTop = HB - 18;
       const firstTop = barTop - bar.h - 16;
@@ -835,36 +935,96 @@
       if (!cols) return null;
       return { ...cand, HB, barTop, firstTop, otherTop, Ls, bar, tab, cols, legH, tier };
     };
-    const choose = (list) => {
-      let best = null;
-      for (const tier of tiers) {
-        for (const cand of list) {
-          const got = attempt(cand, tier);
-          if (!got) continue;
-          // Letter mode: a tighter layout only wins if it prints clearly larger.
-          if (!best || (fitLetter && got.scale > best.scale * 1.12)) best = got;
-          break;
-        }
-        if (best && !fitLetter) break;
-      }
-      return best;
-    };
+
     let best;
     if (fitLetter) {
-      const portrait = opts.orientation === "landscape" ? null : choose(orient("p"));
-      const landscape = choose(orient("l"));
+      // For a target scale s the page is exactly 612/s x 792/s (or rotated).
+      // Find the largest s that still fits, by bisection, then take the layout
+      // whose columns are closest to their normal widths.
+      const fitOn = (land, tier) => {
+        const PW = land ? LETTER_H : LETTER_W;
+        const PH = land ? LETTER_W : LETTER_H;
+        const solve = (s) => {
+          const Wb = PW / s;
+          const H = PH / s;
+          let top = null;
+          for (const nc of dChoices)
+            for (const tc of tChoices) {
+              const geo = fitGeo(Wb, nc, tc, lim);
+              if (!geo) continue;
+              const W = Math.min(Wb, M + nc * (geo.colW + 16) + tc * (geo.rw + 16) - 16 + 8 + M);
+              const got = attempt({ nc, tc, H, W, geo, land, area: W * H, scale: Math.min(1, PW / W, PH / H) }, tier);
+              if (!got) continue;
+              got.q = Math.min(geo.colW / COL_W0, geo.rw / RW0);
+              if (!top || got.q > top.q) top = got;
+            }
+          return top;
+        };
+        const full = solve(1);
+        if (full) return full;
+        let lo = 0.4;
+        let hi = 1;
+        let loSol = solve(lo);
+        if (!loSol) return null;
+        for (let i = 0; i < 8; i++) {
+          const mid = (lo + hi) / 2;
+          const sol = solve(mid);
+          if (sol) (lo = mid), (loSol = sol);
+          else hi = mid;
+        }
+        return loSol;
+      };
+      const pick = (land) => {
+        const a = fitOn(land, tiers[0]);
+        const b = fitOn(land, tiers[1]);
+        if (a && b) return b.scale > a.scale * (opts.tightGain || TIGHT_GAIN) ? b : a;
+        return a || b;
+      };
+      const portrait = opts.orientation === "landscape" ? null : pick(false);
+      let landscape = null;
+      const needLand = opts.orientation === "landscape" || !portrait || portrait.scale < 0.97;
+      if (needLand) landscape = pick(true);
       if (opts.orientation === "landscape") best = landscape;
       else {
         best = portrait;
         if ((!best || best.scale < PORTRAIT_MIN) && landscape && (!best || landscape.scale > best.scale)) best = landscape;
       }
       // what the other orientation would print at (the page offers a rotate button)
-      const other = best && best.land ? choose(orient("p")) : landscape;
+      let other = best && best.land ? (opts.orientation === "landscape" ? pick(false) : portrait || pick(false)) : landscape;
       if (best) best = { ...best, altScale: other ? other.scale : null };
     } else {
-      best = choose(cands);
+      const cands = [];
+      const heights = [];
+      if (opts.height && opts.height !== "auto") heights.push(Number(opts.height));
+      else for (let h = 792; h <= 1728; h += 36) heights.push(h);
+      // normal widths, unless some text would not fit them (long LED signs)
+      const need = textNeeds(cfg);
+      const wide = need.col > COL_W0 || need.rw > RW0;
+      const geo = wide ? { colW: Math.max(COL_W0, need.col), rw: Math.max(RW0, need.rw) } : null;
+      for (const nc of dChoices)
+        for (const tc of tChoices)
+          for (const H of heights) {
+            const W = M + nc * ((geo ? geo.colW : COL_W0) + 16) + tc * ((geo ? geo.rw : RW0) + 16) - 16 + 8 + M;
+            // Very tall, narrow pages are penalised so a wider page wins once the
+            // aspect ratio gets silly (e.g. 8.5 x 24 in vs 12.8 x 14 in).
+            const cost = W * H * (1 + Math.max(0, H / W - 1.7) * 0.6);
+            cands.push({ nc, tc, H, W, geo, area: W * H, cost });
+          }
+      // cheapest page first; on a tie prefer the narrower page
+      cands.sort((a, b) => a.cost - b.cost || a.W - b.W);
+      for (const tier of tiers) {
+        for (const cand of cands) {
+          const got = attempt(cand, tier);
+          if (got) {
+            best = got;
+            break;
+          }
+        }
+        if (best) break;
+      }
     }
     if (!best) throw new Error("This stop has too much information to fit on one poster.");
+    setGeo(best.geo || null);
     return best;
   }
 
@@ -1015,9 +1175,15 @@
           }
           ly -= NAME_PITCH;
         });
+        if (L.also.length) ly -= ALSO_GAP; // clear of the black terminus box
         for (const a of L.also) {
+          if (a.sub) {
+            d.text(ox + L.nx, ly + 1.5, a.text, "F-Ital", 7, GREY);
+            ly -= NAME_PITCH * 0.72;
+            continue;
+          }
           d.text(ox + L.nx, ly, a.text, "F-Semi", 8.6, DGREY);
-          d.text(ox + L.nx + sw(a.text, "F-Semi", 8.6) + 4, ly, `#${a.id}`, "F-Reg", 6.4, GREY);
+          if (a.id != null) d.text(ox + L.nx + sw(a.text, "F-Semi", 8.6) + 4, ly, `#${a.id}`, "F-Reg", 6.4, GREY);
           ly -= NAME_PITCH;
         }
         // transfers
@@ -1045,9 +1211,9 @@
     d.rect(x, y - BAND_H, w, BAND_H, { fill: tint(dest.color, 0.16), r: 3 });
     let bx = x + 10;
     if (cfg.routes.length > 1) {
-      for (const rn of dest.routes) {
-        // the square carries the poster's own code (R1, D2), not just the route letter
-        const tile = cfg.routes.find((t) => t.route === rn) || cfg.routes.find((t) => t.label === rn);
+      for (const rn of dest.tiles && dest.tiles.length ? dest.tiles : dest.routes) {
+        // the square carries the trips' own code (R1, R, D2), not just the route letter
+        const tile = cfg.routes.find((t) => t.label === rn) || cfg.routes.find((t) => t.route === rn);
         bx = badge(d, bx, y - BAND_H / 2, { n: tile ? tile.label : rn, c: tile ? tile.color : dest.color }, 11, 7.8);
       }
       bx += 3;
@@ -1141,17 +1307,20 @@
     for (const r of [
       { n: "A", c: "#EE3325" },
       { n: "B", c: "#80BC00" },
-      { n: "F", c: NAVY },
-    ])
-      bx = badge(d, bx, ly4, r, 11, 7.8);
+      // plain mode: F stands for a near transfer (dashed outline), set apart from A and B
+      ...(cfg.plainTransfers ? [{ n: "F", c: NAVY, near: true, gap: true }] : [{ n: "F", c: NAVY }]),
+    ]) {
+      if (r.gap) bx += 4;
+      bx = badge(d, bx, ly4, r, 11, 7.8) + (r.near ? 1.2 : 0);
+    }
     const tx0 = lx + 52;
     if (cfg.plainTransfers) {
       // "near" sits in a black box, like the outlined badges on the stops
-      const a = "Transfer to other routes at or";
+      const a = "Transfer to routes at or";
       const nx0 = tx0 + sw(a, "F-Reg", 8.4) + 4;
       const nw = sw("near", "F-Reg", 8.4) + 6;
       d.text(tx0, ly4 - 3.0, a, "F-Reg", 8.4, INK);
-      d.rect(nx0, ly4 - 6.6, nw, 11.4, { stroke: BLACK, sw: 1.1 });
+      d.rect(nx0, ly4 - 6.6, nw, 11.4, { stroke: BLACK, sw: 0.95, dash: NEAR_DASH });
       d.text(nx0 + 3, ly4 - 3.0, "near", "F-Reg", 8.4, INK);
       d.text(nx0 + nw + 4, ly4 - 3.0, "the listed stop", "F-Reg", 8.4, INK);
     } else d.text(tx0, ly4 - 3.0, "Transfer to other routes at the listed stop", "F-Reg", 8.4, INK);
@@ -1172,12 +1341,27 @@
     }
   }
 
-  function drawFooter(d, cfg, RC, RX0, RWd, W) {
+  function drawFooter(d, cfg, RC, RX0, RWd0, W) {
     const FB = M + 2;
-    d.rect(M, FB, COL_W, 64, { fill: RC, r: 3 });
-    d.text(M + 12, FB + 48, "City of Madison Metro Transit", "F-Bold", 9.5, WHITE);
-    d.text(M + 12, FB + 28, "cityofmadison.com/metro", "F-Bold", 15.5, WHITE);
-    d.text(M + 12, FB + 11, "(608) 266-4466  |  mymetrobus@cityofmadison.com", "F-Reg", 8.4, WHITE);
+    // The navy box is at least as wide as its text needs; when the diagram
+    // columns are narrow it grows into the space under the next column, and
+    // the right-hand block (yellow box, validity, disclaimer) starts after it.
+    const F1 = "City of Madison Metro Transit";
+    const F2 = "cityofmadison.com/metro";
+    const F3 = "(608) 266-4466  |  mymetrobus@cityofmadison.com";
+    const need = Math.max(sw(F1, "F-Bold", 9.5), sw(F2, "F-Bold", 15.5), sw(F3, "F-Reg", 8.4)) + 24;
+    const room = Math.max(COL_W, RX0 - M - 16);
+    const footW = Math.max(COL_W, Math.min(Math.ceil(need), room));
+    const k = Math.min(1, (footW - 24) / (need - 24));
+    d.rect(M, FB, footW, 64, { fill: RC, r: 3 });
+    d.text(M + 12, FB + 48, F1, "F-Bold", 9.5 * k, WHITE);
+    d.text(M + 12, FB + 28, F2, "F-Bold", 15.5 * k, WHITE);
+    d.text(M + 12, FB + 11, F3, "F-Reg", 8.4 * k, WHITE);
+
+    const xr = Math.min(RX0, M + footW + 16);
+    const RWd = RX0 + RWd0 - xr;
+    const RX1 = RX0;
+    RX0 = xr;
 
     const ybh = 27;
     const yby = FB + 64 - ybh;
@@ -1185,8 +1369,16 @@
     d.circle(RX0 + 15, yby + ybh / 2, 8, { stroke: INK, sw: 1.8 });
     d.text(RX0 + 15, yby + ybh / 2 - 4.3, "!", "F-Bold", 12, INK, { anchor: "middle" });
     const t1 = "Check for detours and holidays";
-    d.text(RX0 + 31, yby + 9.5, t1, "F-Bold", 10.5, INK);
-    d.text(RX0 + 31 + sw(t1, "F-Bold", 10.5) + 5, yby + 9.6, "cityofmadison.com/metro", "F-Ital", 8.5, INK);
+    const t2 = "cityofmadison.com/metro";
+    if (31 + sw(t1, "F-Bold", 10.5) + 5 + sw(t2, "F-Ital", 8.5) + 8 <= RWd) {
+      d.text(RX0 + 31, yby + 9.5, t1, "F-Bold", 10.5, INK);
+      d.text(RX0 + 31 + sw(t1, "F-Bold", 10.5) + 5, yby + 9.6, t2, "F-Ital", 8.5, INK);
+    } else {
+      // narrow box: the address goes on a second line
+      d.text(RX0 + 31, yby + 15.2, t1, "F-Bold", 10.5, INK);
+      d.text(RX0 + 31, yby + 4.6, t2, "F-Ital", 8.5, INK);
+    }
+    void RX1;
 
     // Validity line: dates in bold
     const VFS = 7.2;

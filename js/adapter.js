@@ -210,6 +210,7 @@
             sign: sign(h.board),
             direction: h.routeDirection || posterHeading || "",
             routes: [],
+            codes: [],
             color: h.routeColor || routeColorOf(ctx, h.routeShortName),
             cols: new Map(),
             notes: [],
@@ -218,6 +219,8 @@
           by.set(key, d);
         }
         if (!d.routes.includes(h.routeShortName)) d.routes.push(h.routeShortName);
+        const bcode = String((h.board && h.board.code) || "").toUpperCase();
+        if (bcode && !d.codes.includes(bcode)) d.codes.push(bcode);
         const note = headingNote(h);
         if (note && !d.notes.includes(note)) d.notes.push(note);
         for (const col of h.columns || []) {
@@ -252,6 +255,7 @@
           sign: d.sign,
           direction: d.direction,
           routes: d.routes,
+          codes: d.codes,
           color: d.color,
           blocks,
           notes: d.notes,
@@ -311,6 +315,7 @@
       return S.transferGroups(xfer).map((g) => ({
         routes: g.routes.map((r) => ({ n: r.n, c: r.c || fallbackColor(r.n), t: r.t || "#FFFFFF" })),
         walk: g.code ? S.roundFeetUp10(g.d) : null,
+        code: g.code ? String(g.code) : null,
       }));
     }
 
@@ -348,8 +353,9 @@
             if (s && !it.chips.includes(s)) it.chips.push(s);
           }
           if (row.kind === "closeTerminus") {
-            const evening = (geo[row.eveningCode] && geo[row.eveningCode].n) || row.eveningCode;
-            it.note = `Some trips end at ${evening} (#${row.eveningCode}) ${row.eveningWhen || "on evenings and weekends"}.`;
+            // The other stop is listed under this one ("or ..."), with when trips end there
+            const when = String(row.eveningWhen || "on evenings and weekends").replace(/^on\s+/i, "");
+            it.alsoWhen = `(${when.charAt(0).toUpperCase()}${when.slice(1)})`;
           }
         }
       }
@@ -450,6 +456,25 @@
           }
         }
         it.groups = [...seen.values()];
+        if (it.codes.length > 1) {
+          // Two stops are shown as one (Junction / Junction at Park and Ride): a route
+          // that serves either of them counts as being at this stop, not nearby.
+          const own = new Set(it.codes.map(String));
+          const hereRoutes = [];
+          const rest = [];
+          for (const g of it.groups) {
+            if (g.walk == null || own.has(g.code)) {
+              for (const r of g.routes) if (!hereRoutes.some((x) => x.n === r.n)) hereRoutes.push(r);
+            } else rest.push(g);
+          }
+          const groups = [];
+          if (hereRoutes.length) groups.push({ routes: hereRoutes, walk: null, code: null });
+          for (const g of rest) {
+            const routes = g.routes.filter((r) => !hereRoutes.some((x) => x.n === r.n));
+            if (routes.length) groups.push({ ...g, routes });
+          }
+          it.groups = groups;
+        }
         delete it.only;
         delete it.xferCodes;
         delete it.codes;
@@ -561,7 +586,21 @@
             if (tiles.some((t) => t.label === g.titleCode)) continue;
             tiles.push({ label: String(g.titleCode), color: routeColorOf(ctx, g.routeName), route: g.routeName });
           }
+          // Trips with a plain code (R, going to Segoe) that run on a numbered poster (R1)
+          // get their own tile, so both codes show in the header and on their band.
+          for (const dd of dests) {
+            for (const c of dd.codes || []) {
+              if (tiles.some((t) => t.label === c)) continue;
+              const rn = dd.routes[0];
+              if (rn && c.toUpperCase().startsWith(String(rn).toUpperCase())) {
+                tiles.push({ label: c, color: routeColorOf(ctx, rn), route: rn });
+              }
+            }
+          }
           tiles.sort((a, b) => S.compareBoardCodes(a.label, b.label));
+          for (const dd of dests) {
+            dd.tiles = (dd.codes || []).filter((c) => tiles.some((t) => t.label === c));
+          }
 
           posters.push({
             routes: tiles,

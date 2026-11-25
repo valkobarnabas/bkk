@@ -1246,6 +1246,7 @@ function prettyDest(dest) {
       if (/^via$/i.test(w)) return "via";
       if (/^uw$/i.test(w)) return "UW";
       if (/^to$/i.test(w)) return "to";
+      if (/^and$/i.test(w)) return "and";
       if (/^[nsew]$/i.test(w) || /^(ne|nw|se|sw)$/i.test(w)) return w.toUpperCase();
       // McKee, McKenna, O'Brien (BKK posters: names keep their inner capital)
       const mc = /^(mc)([a-z]{2,})$/i.exec(w);
@@ -1257,7 +1258,7 @@ function prettyDest(dest) {
   return String(dest || "")
     .split(/\s+/)
     .filter(Boolean)
-    .map((w) => w.split("/").map(one).join("/"))
+    .map((w) => w.split("/").map((p) => p.split("-").map(one).join("-")).join("/"))
     .join(" ");
 }
 
