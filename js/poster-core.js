@@ -375,6 +375,14 @@
       bottom = Math.max(bottom, yOff + XFER_PITCH * curLine + 5.9);
     }
     L.yOff = yOff;
+    L.termLines = [];
+    if (it.endNote) {
+      // "(Trips towards X terminate here)" in place of the headboard sign
+      L.termLines = wrapSegs(it.endNote, 7, xmax - nx);
+      const first = Math.max(bottom, 9 + NAME_PITCH * (nameLines - 1)) + 6.5;
+      L.termY = first + 3.8;
+      bottom = first + L.termLines.length * 8.6;
+    }
     if (it.note) {
       L.noteLines = wrapText(it.note, "F-Ital", 6.6, xmax - nx, 3);
       const first = Math.max(bottom, 9 + NAME_PITCH * (nameLines - 1)) + 3;
@@ -427,12 +435,21 @@
       .map((o) => o.x);
     // One caret per destination name (bands are split by route, titles repeat),
     // and "X via Y" is dropped when plain "X" is also listed.
+    // Exception: a one-off plain "X" (a lone Eagle Heights run) does not replace the
+    // "X via Y" that most trips use; the one-off caret is dropped instead.
+    const tripsOf = new Map();
+    for (const x of sorted) tripsOf.set(x.title.toLowerCase(), Math.max(tripsOf.get(x.title.toLowerCase()) || 0, x.trips || 0));
     const names = new Set(sorted.map((x) => x.title.toLowerCase()));
+    const minorOf = (t) => {
+      // t is a plain name; is it a minor one-off next to some "t via ..." destination?
+      const mine = tripsOf.get(t) || 0;
+      return mine <= 2 && [...names].some((o) => o.startsWith(t + " via ") && mine * 6 <= (tripsOf.get(o) || 0));
+    };
     const seenTitles = new Set();
     const dests = sorted.filter((x) => {
       const t = x.title.toLowerCase();
-      const viaOfOther = [...names].some((o) => o !== t && t.startsWith(o + " via "));
-      if (viaOfOther || seenTitles.has(t)) return false;
+      const viaOfOther = [...names].some((o) => o !== t && t.startsWith(o + " via ") && !minorOf(o));
+      if (viaOfOther || minorOf(t) || seenTitles.has(t)) return false;
       seenTitles.add(t);
       return true;
     });
@@ -783,12 +800,69 @@
     return { fs: f, lines, h: lines.length > 1 ? 52 : 40 };
   }
 
+  /**
+   * Option "textSigns": no headboard (LED) signs. Destinations are written on the bands,
+   * and where trips end the stop gets a note: "(Trips towards Segoe terminate here)"
+   * with the destination in bold.
+   */
+  function withTextSigns(cfg) {
+    const nice = (s) =>
+      String(s)
+        .toLowerCase()
+        .replace(/(^|[\s/-])([a-z])/g, (m, a, b) => a + b.toUpperCase());
+    const items = cfg.items.map((it) => {
+      if (!it.chips || !it.chips.length) return it;
+      const names = it.chipTitles && it.chipTitles.length === it.chips.length ? it.chipTitles : it.chips.map(nice);
+      const segs = [{ t: "(Trips towards " }];
+      names.forEach((n, i) => {
+        if (i > 0) segs.push({ t: i === names.length - 1 ? " and " : ", " });
+        segs.push({ t: n, b: true });
+      });
+      segs.push({ t: " terminate here)" });
+      return { ...it, chips: [], endNote: segs };
+    });
+    return { ...cfg, items, textSigns: true };
+  }
+
+  /** Word-wraps italic text that has bold parts: `segs` is [{t, b}]; returns lines of {t, b} words. */
+  function wrapSegs(segs, size, maxW) {
+    const words = [];
+    for (const s of segs) for (const w of String(s.t).split(/\s+/).filter(Boolean)) words.push({ t: w, b: !!s.b });
+    const fnt = (w) => (w.b ? "F-Bold" : "F-Ital");
+    const space = sw(" ", "F-Ital", size);
+    const lines = [];
+    let cur = [];
+    let curW = 0;
+    for (const w of words) {
+      const ww = sw(w.t, fnt(w), size);
+      if (cur.length && curW + space + ww > maxW) {
+        lines.push(cur);
+        cur = [];
+        curW = 0;
+      }
+      curW += (cur.length ? space : 0) + ww;
+      cur.push(w);
+    }
+    if (cur.length) lines.push(cur);
+    return lines;
+  }
+
+  function drawSegs(d, x, y, words, size) {
+    const space = sw(" ", "F-Ital", size);
+    for (const w of words) {
+      const font = w.b ? "F-Bold" : "F-Ital";
+      d.text(x, y, w.t, font, size, w.b ? DGREY : GREY);
+      x += sw(w.t, font, size) + space;
+    }
+  }
+
   /** Pick the smallest page where the diagram and the time boxes both fit. */
   /**
    * Option "plainTransfers": every transfer route is listed once, with no "+"
    * between groups and no walking distances; the key loses its walking row.
    */
   function withOptions(cfg, opts) {
+    if (opts.textSigns && !cfg.textSigns) cfg = withTextSigns(cfg);
     if (!opts.plainTransfers || cfg.plainTransfers) return cfg;
     const items = cfg.items.map((it) => {
       if (!it.groups || !it.groups.length) return it;
@@ -879,7 +953,9 @@
         }
         tiles += 3;
       }
-      rw = Math.max(rw, 10 + tiles + sw(lab, "F-Bold", 12) + 8 + ledWidth(dest.sign, 6.4, 0.5) + 8);
+      rw = cfg.textSigns
+        ? Math.max(rw, 10 + tiles + sw(lab, "F-Semi", 11.5) + 5 + sw(dest.title || dest.sign, "F-Bold", 10.5) + 8)
+        : Math.max(rw, 10 + tiles + sw(lab, "F-Bold", 12) + 8 + ledWidth(dest.sign, 6.4, 0.5) + 8);
     }
     return { col: Math.ceil(col), rw: Math.ceil(rw) };
   }
@@ -982,8 +1058,8 @@
       };
       const portrait = opts.orientation === "landscape" ? null : pick(false);
       let landscape = null;
-      const needLand = opts.orientation === "landscape" || !portrait || portrait.scale < 0.97;
-      if (needLand) landscape = pick(true);
+      // landscape is always worked out, so the page can offer it with its percentage
+      landscape = pick(true);
       if (opts.orientation === "landscape") best = landscape;
       else {
         best = portrait;
@@ -1197,6 +1273,7 @@
           const yy = y - L.yOff - XFER_PITCH * ch.line;
           ledChip(d, ox + ch.x, yy, ch.sign);
         }
+        L.termLines.forEach((ln, k) => drawSegs(d, ox + L.nx, y - L.termY - k * 8.6, ln, 7));
         if (L.noteLines.length) {
           L.noteLines.forEach((ln, k) => {
             d.text(ox + L.nx, y - L.noteY - k * 8.6, ln, "F-Ital", 6.6, GREY);
@@ -1219,6 +1296,16 @@
       bx += 3;
     }
     const lab = dest.direction ? `${dest.direction} towards` : "Towards";
+    if (cfg.textSigns) {
+      // no headboard: "Westbound towards" and the destination, written out
+      d.text(bx, y - BAND_H / 2 - 4.1, lab, "F-Semi", 11.5, INK);
+      const tx = bx + sw(lab, "F-Semi", 11.5) + 5;
+      const title = dest.title || dest.sign;
+      let tfs = 13;
+      while (sw(title, "F-Bold", tfs) > x + w - 8 - tx && tfs > 10.5) tfs -= 0.5;
+      d.text(tx, y - BAND_H / 2 - tfs * 0.35, ellipsize(title, "F-Bold", tfs, x + w - 8 - tx), "F-Bold", tfs, INK);
+      return;
+    }
     d.text(bx, y - BAND_H / 2 - 4.1, lab, "F-Bold", 12, INK);
     const cx0 = bx + sw(lab, "F-Bold", 12) + 8;
     const fl = fitLed(dest.sign, x + w - 8 - cx0, 10.4, 0.5, 6.4);
@@ -1336,6 +1423,11 @@
       d.text(lx + 7, my + 0.1, m.letter, "F-Bold", 6.8, WHITE, { anchor: "middle" });
       d.text(tx0, my - 0.4, "Only trips towards", "F-Reg", 8.4, INK);
       const sx = tx0 + sw("Only trips towards", "F-Reg", 8.4) + 5;
+      if (cfg.textSigns) {
+        const names = (m.titles && m.titles.length ? m.titles : m.signs).join(" / ");
+        d.text(sx, my - 0.4, ellipsize(names, "F-Bold", 8.8, RX0 + RWd - 8 - sx), "F-Bold", 8.8, INK);
+        continue;
+      }
       const fl = fitLed(m.signs.join(" / "), RX0 + RWd - 8 - sx, 6.2, 0.55, 4.6);
       ledChip(d, sx, my + 2.4, fl.text, 11, fl.fs, 0.55);
     }

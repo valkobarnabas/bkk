@@ -57,6 +57,8 @@
     daily: "Daily",
   };
 
+  /** How far (feet) a stop may be and still be listed as a "near" transfer. */
+  const TRANSFER_FEET = 250;
   const low = (s) => String(s == null ? "" : s).toLowerCase();
   const normDest = (s) =>
     String(s || "")
@@ -153,6 +155,22 @@
     }
 
     // ----------------------------------------------------------- timetables
+    /** True when the stop's timetable has a heading for this trip's destination sign. */
+    function canBoardHere(entry, inst) {
+      const dest = normDest(inst.board && inst.board.dest);
+      if (!dest) return true;
+      const route = low(inst.r);
+      const have = new Set();
+      for (const part of entry.parts || []) {
+        if (low(part.route && part.route.route_short_name) !== route) continue;
+        for (const h of part.headings || []) have.add(normDest(h.board && h.board.dest));
+      }
+      if (!have.size || have.has(dest)) return true;
+      // "X via Y" trips fold into a plain "X" heading
+      const via = dest.indexOf(" VIA ");
+      return via > 0 && have.has(dest.slice(0, via));
+    }
+
     function headingsFor(ctx, stopCode, routeSet, poster, allGroups) {
       const entry = ctx.byCode[stopCode];
       const out = [];
@@ -165,6 +183,9 @@
         for (const h of part.headings || []) {
           if (!destSet.has(normDest(h.board && h.board.dest))) continue;
           const code = String((h.board && h.board.code) || "").toUpperCase();
+          // School runs (617, 618, ...) are separate trips: a poster lists only its own codes.
+          const schoolRoute = ctx.routeByName.get(String(part.route.route_short_name));
+          if (schoolRoute && schoolRoute.s && code && !codes.has(code)) continue;
           const variant = S.boardParts(code).variant;
           if (variant && !codes.has(code)) continue; // numbered trips that belong to another poster
           if (!variant) {
@@ -289,7 +310,7 @@
     }
 
     // ----------------------------------------------------------- diagram
-    function transfersFor(ctx, code, routeNames, clusterSet, boardsFor, opts) {
+    function transfersFor(ctx, code, routeNames, clusterSet, boardsFor, opts, arrivals) {
       const same = new Map();
       const others = new Map();
       for (const rn of routeNames) {
@@ -298,7 +319,8 @@
           rn,
           opts.radius,
           ctx.served,
-          { excludeSchool: !!opts.excludeSchool },
+          // `fromSpans`: at a stop where the trips end, the check uses their arrival times
+          { excludeSchool: !!opts.excludeSchool, fromSpans: arrivals ? arrivals.get(low(rn)) : null },
           boardsFor(rn)
         );
         for (const r of x.same) if (!clusterSet.has(low(r.n))) same.set(r.n, r);
@@ -391,7 +413,7 @@
         } else if (!ends) {
           let m = markers.find((x) => x.key === key);
           if (!m) {
-            m = { key, letter: String.fromCharCode(97 + markers.length), signs: [...new Set(it.only.map(sign))] };
+            m = { key, letter: String.fromCharCode(97 + markers.length), signs: [...new Set(it.only.map(sign))], titles: [...new Set(it.only.map(pretty))] };
             markers.push(m);
           }
           for (let k = i; k <= j; k++) items[k].marker = m.letter;
@@ -444,13 +466,39 @@
         for (let k = s; k < i; k++) delete items[k].marker;
       }
 
+      // Where the poster's trips only arrive (they end at this stop) there are no departures to
+      // compare with, so the "is the other route still running?" check uses the arrival times:
+      // the departures from the poster's stop plus each trip's ride time.
+      const arrivalSpans = (code) => {
+        const out = new Map();
+        for (const rn of poster.routeNames) {
+          const own = S.clockSpans(ctx.served.clock, code, rn, null);
+          if (!ctx.served.clock || (own && own.length)) continue; // trips leave from here too
+          const spans = [];
+          for (const inst of poster.insts) {
+            if (low(inst.r) !== low(rn)) continue;
+            const at = inst.remaining.indexOf(String(code));
+            if (at < 0) continue;
+            const off = inst.minutes[at] || 0;
+            // the departures at the poster's stop of the trips that end here (same sign)
+            const dep = S.clockSpans(ctx.served.clock, poster.stopCode, rn, [inst.board]) || [];
+            const sameSign = dep.filter((o) => normDest(o.dest) === normDest(inst.board && inst.board.dest));
+            for (const o of sameSign.length ? sameSign : dep) {
+              spans.push({ days: o.days, first: o.first + off, last: o.last + off });
+            }
+          }
+          if (spans.length) out.set(low(rn), spans);
+        }
+        return out;
+      };
+
       for (const it of items) {
         it.lane = it.lane || 0;
         it.terminal = it.chips.length > 0 && !it.rejoin;
         const boardsFor = () => it.only || poster.boards;
         const seen = new Map();
         for (const code of it.xferCodes) {
-          for (const g of transfersFor(ctx, code, poster.routeNames, clusterSet, boardsFor, opts)) {
+          for (const g of transfersFor(ctx, code, poster.routeNames, clusterSet, boardsFor, opts, arrivalSpans(code))) {
             const k = g.routes.map((r) => r.n).join(",") + "|" + (g.walk || "");
             if (!seen.has(k)) seen.set(k, g);
           }
@@ -487,7 +535,7 @@
      * @returns {Array} poster configs (see poster-core.js)
      */
     function build(ctx, stopCode, routeNames, opts) {
-      opts = Object.assign({ excludeSchool: true, merge: true, radius: S.DEFAULT_RADIUS }, opts || {});
+      opts = Object.assign({ excludeSchool: true, merge: true, radius: TRANSFER_FEET }, opts || {});
       const code = String(stopCode);
       const entry = ctx.byCode[code];
       if (!entry) throw new Error(`No data for stop ${code}.`);
@@ -496,6 +544,11 @@
 
       let instances = S.patternsForStop(ctx.served, code).filter((i) => want.has(low(i.r)));
       if (opts.excludeSchool) instances = instances.filter((i) => !(ctx.routeByName.get(i.r) || {}).s);
+      // A trip that has no timetable heading at this stop cannot be boarded here (the lone
+      // Eagle Heights run, B trips to Kennedy that only drop off): leave it out of the
+      // diagram too, so it is not drawn as a destination.
+      const boardableHere = instances.filter((i) => canBoardHere(entry, i));
+      if (boardableHere.length) instances = boardableHere;
       if (!instances.length) {
         throw new Error(`No departures from stop ${code} on the selected route${want.size > 1 ? "s" : ""}.`);
       }
@@ -579,6 +632,8 @@
               (c) => !it.chips.some((o) => o !== c && normDest(c).startsWith(normDest(o) + " VIA "))
             );
           }
+          // readable names of the same signs (used when headboard signs are switched off)
+          for (const it of items) it.chipTitles = it.chips.map((c) => S.prettyDest(c));
 
           const tiles = [];
           for (const g of cluster) {
@@ -602,7 +657,12 @@
             dd.tiles = (dd.codes || []).filter((c) => tiles.some((t) => t.label === c));
           }
 
+          const schoolRoute = (ctx.routeByName.get(String(first.routeName)) || {}).s;
           posters.push({
+            // School runs with identical stop lists share one poster (merged below)
+            _schoolKey: schoolRoute
+              ? `${first.routeName}|${first.dirId}|${items.map((it) => `${it.id}:${it.lane}:${it.chips.join("/")}`).join(",")}`
+              : null,
             routes: tiles,
             routeNames: routeNamesHere,
             stopName: stop.stop_name || geo.n || code,
@@ -622,7 +682,50 @@
         }
       }
       if (!posters.length) throw new Error(`No remaining stops from ${code} on the selected route.`);
-      return posters;
+      return mergeSchoolPosters(posters);
+    }
+
+    /** School runs (one code each) that serve the same stops become one poster. */
+    function mergeSchoolPosters(list) {
+      const out = [];
+      const byKey = new Map();
+      for (const p of list) {
+        const key = p._schoolKey;
+        delete p._schoolKey;
+        const m = key ? byKey.get(key) : null;
+        if (!m) {
+          out.push(p);
+          if (key) byKey.set(key, p);
+          continue;
+        }
+        for (const t of p.routes) if (!m.routes.some((x) => x.label === t.label)) m.routes.push(t);
+        m.routes.sort((a, b) => S.compareBoardCodes(a.label, b.label));
+        for (const n of p.routeNames) if (!m.routeNames.includes(n)) m.routeNames.push(n);
+        for (const pd of p.dests) {
+          const md = m.dests.find((x) => x.key === pd.key && x.routes.join(",") === pd.routes.join(","));
+          if (!md) {
+            m.dests.push(pd);
+            continue;
+          }
+          for (const c of pd.codes || []) if (!md.codes.includes(c)) md.codes.push(c);
+          md.tiles = [...new Set([...(md.tiles || []), ...(pd.tiles || [])])].sort(S.compareBoardCodes);
+          for (const n of pd.notes || []) if (!md.notes.includes(n)) md.notes.push(n);
+          for (const pb of pd.blocks) {
+            const mb = md.blocks.find((x) => x.label === pb.label);
+            if (!mb) {
+              md.blocks.push(pb);
+              continue;
+            }
+            const seen = new Set(mb.times.map((t) => `${t[0]}:${t[1]}`));
+            for (const t of pb.times) if (!seen.has(`${t[0]}:${t[1]}`)) mb.times.push(t);
+            mb.times.sort((a, b) => minuteOf(a[0], a[1]) - minuteOf(b[0], b[1]));
+          }
+          const wk = md.blocks.find((b) => /Monday/.test(b.label) && /Friday/.test(b.label));
+          md.trips = wk ? wk.times.length : Math.max(0, ...md.blocks.map((b) => b.times.length));
+          md.reach = Math.max(md.reach, pd.reach);
+        }
+      }
+      return out;
     }
 
     return { prepare, build, clusterGroups, fallbackColor };

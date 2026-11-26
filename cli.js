@@ -15,10 +15,12 @@
  *   --school           include school-extra routes
  *   --letter           always output a US Letter page (portrait or landscape);
  *                      big posters are shrunk to fit, so the type gets smaller.
- *                      Stays portrait; the log says when --landscape would print larger
+ *                      Stays portrait; the log says what --landscape would print at
  *   --landscape        like --letter, but on a landscape sheet
  *   --plain-transfers  list every transfer route once: no "+", no walking distances,
  *                      and no walking row in the key
+ *   --text-signs       no headboard (LED) signs: destinations are plain text on the bands,
+ *                      and where trips end a note says "(Trips towards X terminate here)"
  *   --format LIST      svg (default), html, pdf  (pdf needs Edge or Chrome)
  *   --out DIR          output folder (default ./out)
  *   --cols N           force N diagram columns (1-3)
@@ -50,6 +52,7 @@ function parseArgs(argv) {
     else if (k === "--school") a.school = true;
     else if (k === "--letter") a.fit = "letter";
     else if (k === "--plain-transfers") a.plainTransfers = true;
+    else if (k === "--text-signs") a.textSigns = true;
     else if (k === "--landscape") (a.fit = "letter"), (a.orientation = "landscape");
     else if (k === "--format") a.format = next();
     else if (k === "--out") a.out = next();
@@ -134,7 +137,7 @@ function main() {
   if (formats.has("pdf") && !browser) console.error("No Edge/Chrome found for PDF output (set BKK_BROWSER). Writing HTML instead.");
 
   posters.forEach((cfg, i) => {
-    const res = Poster.render(cfg, { logo, fontCss, cols: args.cols, height: args.height, fit: args.fit, orientation: args.orientation, plainTransfers: args.plainTransfers });
+    const res = Poster.render(cfg, { logo, fontCss, cols: args.cols, height: args.height, fit: args.fit, orientation: args.orientation, plainTransfers: args.plainTransfers, textSigns: args.textSigns });
     const base = path.join(
       args.out,
       `${slug(cfg.routes.map((r) => r.label).join("-"))}-${cfg.stopId}${posters.length > 1 ? "-" + (i + 1) : ""}`
@@ -173,7 +176,7 @@ function main() {
         `${cfg.items.length} stops, ${cfg.dests.length} destination${cfg.dests.length === 1 ? "" : "s"}, ` +
         `page ${res.info.pageIn}${res.info.columns > 1 ? ` (${res.info.columns} columns)` : ""}` +
         `${res.info.scale < 0.999 ? `, shrunk to ${Math.round(res.info.scale * 100)}%` : ""}` +
-        `${res.info.otherScale != null && res.info.otherScale > res.info.scale * 1.03 ? ` (${res.info.landscape ? "portrait" : "--landscape"} would print at ${Math.round(res.info.otherScale * 100)}%)` : ""} -> ${written.join(", ")}`
+        `${res.info.otherScale != null ? ` (${res.info.landscape ? "portrait" : "--landscape"} would print at ${Math.round(res.info.otherScale * 100)}%)` : ""} -> ${written.join(", ")}`
     );
   });
 }

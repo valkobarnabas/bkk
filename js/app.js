@@ -11,7 +11,7 @@
 
   const $ = (id) => document.getElementById(id);
   const qEl = $("q"), resultsEl = $("results"), pickedEl = $("picked"), routesEl = $("routes");
-  const noSchoolEl = $("noschool"), mergeEl = $("merge"), letterEl = $("letter"), plainEl = $("plain"), goEl = $("go"), errEl = $("err"), outEl = $("out");
+  const noSchoolEl = $("noschool"), mergeEl = $("merge"), letterEl = $("letter"), plainEl = $("plain"), textEl = $("textsigns"), goEl = $("go"), errEl = $("err"), outEl = $("out");
 
   let pack = null, ctx = null, selected = null, logo = null;
   let posterCount = 0;
@@ -171,6 +171,7 @@
 
   const fitOpt = () => (letterEl.checked ? "letter" : undefined);
   const plainOpt = () => plainEl.checked;
+  const textOpt = () => textEl.checked;
 
   function addCard(cfg, firstRes) {
     const base = `${slug(cfg.routes.map((r) => r.label).join("-"))}-${cfg.stopId}`;
@@ -201,16 +202,18 @@
       const svg = sheetEl.querySelector("svg");
       svg.removeAttribute("width");
       svg.removeAttribute("height");
-      // Fit-to-letter: offer the other orientation when it would print larger
-      const better = i.otherScale != null && i.otherScale > i.scale * 1.03;
-      rotateEl.hidden = !better;
-      if (better) {
+      // Fit-to-letter: always offer the other orientation, with what each would print at
+      const can = i.otherScale != null;
+      rotateEl.hidden = !can;
+      if (can) {
+        const here = Math.round(i.scale * 100);
+        const there = Math.round(i.otherScale * 100);
         rotateEl.textContent = i.landscape
-          ? `Rotate to portrait (${Math.round(i.otherScale * 100)}% instead of ${Math.round(i.scale * 100)}%)`
-          : `Rotate to landscape (${Math.round(i.otherScale * 100)}% instead of ${Math.round(i.scale * 100)}%)`;
+          ? `Rotate to portrait (${there}% instead of ${here}%)`
+          : `Rotate to landscape (${there}% instead of ${here}%)`;
       }
     };
-    const render = (extra) => Poster.render(cfg, Object.assign({ logo, fit: fitOpt(), orientation, plainTransfers: plainOpt() }, extra || {}));
+    const render = (extra) => Poster.render(cfg, Object.assign({ logo, fit: fitOpt(), orientation, plainTransfers: plainOpt(), textSigns: textOpt() }, extra || {}));
     paint(firstRes);
     // a rotated poster keeps its choice, and always offers the way back
     const showRotateBack = (res) => {
@@ -270,7 +273,7 @@
     let made = 0;
     for (const cfg of posters) {
       try {
-        addCard(cfg, Poster.render(cfg, { logo, fit: fitOpt(), plainTransfers: plainOpt() }));
+        addCard(cfg, Poster.render(cfg, { logo, fit: fitOpt(), plainTransfers: plainOpt(), textSigns: textOpt() }));
         made++;
       } catch (err) {
         showErr(`${cfg.routes.map((r) => r.label).join(" + ")}: ${err.message || err}`);
@@ -286,6 +289,7 @@
     if (!noSchoolEl.checked) p.set("school", "1");
     if (letterEl.checked) p.set("letter", "1");
     if (plainEl.checked) p.set("plain", "1");
+    if (textEl.checked) p.set("text", "1");
     history.replaceState(null, "", "?" + p.toString());
   }
   goEl.addEventListener("click", generate);
@@ -300,6 +304,7 @@
     if (params.get("school") === "1") noSchoolEl.checked = false;
     if (params.get("letter") === "1") letterEl.checked = true;
     if (params.get("plain") === "1") plainEl.checked = true;
+    if (params.get("text") === "1") textEl.checked = true;
     showPicked(stop);
     const route = params.get("route");
     if (route) {

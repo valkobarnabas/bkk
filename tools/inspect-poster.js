@@ -20,10 +20,10 @@ const code = process.argv[2];
 const stop = pack.stops.find((s) => String(s.code) === String(code) || String(s.code) === String(code).padStart(4, "0"));
 if (!stop) throw new Error("no such stop " + code);
 const names = process.argv[3] ? process.argv[3].split(",") : stop.routes.filter((x) => !x.s).map((x) => x.n);
-for (const cfg of A.build(ctx, stop.code, names, {})) {
+for (const cfg of A.build(ctx, stop.code, names, { excludeSchool: !process.argv.includes("school") })) {
   console.log(`\nPOSTER ${cfg.routes.map((r) => r.label).join(" + ")}  (${cfg.stopName})`);
   console.log("  tiles:", cfg.routes.map((r) => `${r.label}[route=${r.route}]`).join(", "));
   for (const d of cfg.dests) {
-    console.log(`  dest "${d.title}" sign="${d.sign}" dir=${d.direction} routes=${JSON.stringify(d.routes)} key=${d.key} blocks=${d.blocks.length}`);
+    console.log(`  dest "${d.title}" sign="${d.sign}" dir=${d.direction} routes=${JSON.stringify(d.routes)} key=${d.key} blocks=${d.blocks.length} trips=${d.trips} reach=${d.reach}`);
   }
 }

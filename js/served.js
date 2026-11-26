@@ -1007,8 +1007,10 @@ function serviceSpan(pack, routeName, stopCode) {
   return { first, last };
 }
 
-function serviceOverlaps(pack, fromRoute, fromStop, toRoute, toStop, fromBoards) {
-  const fromSpans = clockSpans(pack && pack.clock, fromStop, fromRoute, fromBoards);
+function serviceOverlaps(pack, fromRoute, fromStop, toRoute, toStop, fromBoards, fromSpansOverride) {
+  // `fromSpansOverride`: when the trips only arrive at fromStop (they end there), the spans
+  // are their arrival times, worked out by the caller.
+  const fromSpans = fromSpansOverride || clockSpans(pack && pack.clock, fromStop, fromRoute, fromBoards);
   const toSpans = clockSpans(pack && pack.clock, toStop, toRoute, null);
   if (fromSpans && toSpans) {
     if (fromSpans.length && toSpans.length) return spansConnect(fromSpans, toSpans);
@@ -1083,7 +1085,7 @@ function transfersForStop(stopCode, posterRouteName, radius, pack, opts, fromBoa
     !sameRouteName(r.n, posterRouteName) &&
     !(excludeSchool && r.s) &&
     routeDepartsFrom(pack, r.n, at) &&
-    serviceOverlaps(pack, posterRouteName, stopCode, r.n, at, fromBoards);
+    serviceOverlaps(pack, posterRouteName, stopCode, r.n, at, fromBoards, opts && opts.fromSpans);
   const same = here.filter((r) => keep(r, stopCode));
   const nearby = [];
   if (origin && radius > 0) {
@@ -2454,6 +2456,7 @@ const api = {
   loiItemsForStop,
   transfersForStop,
   serviceOverlaps,
+  clockSpans,
   buildClockIndex,
   addHourMinutes,
   headsignLabel,
