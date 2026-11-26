@@ -597,7 +597,7 @@
   let TCOL_PITCH = RW + 16;
 
   function legendHeight(cfg) {
-    return (cfg.plainTransfers ? 70 : 92) + 17 * (cfg.markers ? cfg.markers.length : 0);
+    return (cfg.plainTransfers ? 76 : 98) + 17 * (cfg.markers ? cfg.markers.length : 0);
   }
 
   function noteLinesFor(dest) {
@@ -1491,15 +1491,20 @@
     // the right-hand block (yellow box, validity, disclaimer) starts after it.
     const F1 = "City of Madison Metro Transit";
     const F2 = "cityofmadison.com/metro";
-    const F3 = "(608) 266-4466  |  mymetrobus@cityofmadison.com";
+    const F3 = "(608) 266-4466    mymetrobus@cityofmadison.com";
     const need = Math.max(sw(F1, "F-Bold", 9.5), sw(F2, "F-Bold", 15.5), sw(F3, "F-Reg", 8.4)) + 24;
     const room = Math.max(COL_W, RX0 - M - 16);
     const footW = Math.max(COL_W, Math.min(Math.ceil(need), room));
     const k = Math.min(1, (footW - 24) / (need - 24));
-    d.rect(M, FB, footW, 64, { fill: RC, r: 3 });
-    d.text(M + 12, FB + 48, F1, "F-Bold", 9.5 * k, WHITE);
-    d.text(M + 12, FB + 28, F2, "F-Bold", 15.5 * k, WHITE);
-    d.text(M + 12, FB + 11, F3, "F-Reg", 8.4 * k, WHITE);
+    // black and white: an outline like the yellow box, so it does not compete with the current stop
+    d.rect(M, FB, footW, 64, BWM ? { fill: WHITE, stroke: BLACK, sw: 1.6, r: 3 } : { fill: RC, r: 3 });
+    const FT = BWM ? BLACK : WHITE;
+    d.text(M + 12, FB + 48, F1, "F-Bold", 9.5 * k, FT);
+    d.text(M + 12, FB + 28, F2, "F-Bold", 15.5 * k, FT);
+    // phone on the left, e-mail flush right
+    const [phone, mail] = F3.split(/\s{2,}/);
+    d.text(M + 12, FB + 11, phone, "F-Reg", 8.4 * k, FT);
+    d.text(M + footW - 12, FB + 11, mail, "F-Reg", 8.4 * k, FT, { anchor: "end" });
 
     const xr = Math.min(RX0, M + footW + 16);
     const RWd = RX0 + RWd0 - xr;
