@@ -24,15 +24,27 @@
   const NAVY_DARK = "#1d1b45";
   const BAR_BG = "#131747"; // stop bar background
   const BAR_BG_DIM = "#090a26"; // ... for navy routes
-  const AMBER = "#f5a623";
+  let AMBER = "#f5a623"; // (a few colours change in black-and-white mode, see setPalette)
   const LED_BG = "#0c0c0c";
-  const PM_FILL = "#d6d6d6";
+  let PM_FILL = "#d6d6d6";
   const INK = "#111111";
-  const GREY = "#666666";
-  const DGREY = "#444444";
+  let GREY = "#666666";
+  let DGREY = "#444444";
   const YELLOW = "#ffd200";
   const WHITE = "#ffffff";
   const BLACK = "#000000";
+
+  // Black-and-white mode is a design of its own, not the colours turned grey: routes are told
+  // apart by their letters, "at the stop" is solid black and "near" is white with a dashed
+  // border, termini are bullseyes, the LED text is white, and the greys are darker.
+  let BWM = false;
+  function setPalette(bw) {
+    BWM = !!bw;
+    AMBER = BWM ? WHITE : "#f5a623";
+    PM_FILL = BWM ? "#c4c4c4" : "#d6d6d6";
+    GREY = BWM ? "#2a2a2a" : "#666666";
+    DGREY = BWM ? "#111111" : "#444444";
+  }
 
   const DASH_LEN = 1.8; // "continues" dashes on the route line
   const DASH_PITCH = 2.8;
@@ -214,6 +226,12 @@
     const w = badgeW(label, fs);
     // plain-transfers mode: a dashed black outline, just outside the square (so it
     // shows up on navy routes too), marks routes that are not at this stop
+    if (BWM && r.near) {
+      // black and white: a near route is a white square with a dashed black border
+      d.rect(x, y - h / 2, w, h, { fill: WHITE, stroke: BLACK, sw: 1, dash: NEAR_DASH });
+      d.text(x + w / 2, y - fs * 0.35, label, "F-Bold", fs, BLACK, { anchor: "middle" });
+      return x + w + 1.8;
+    }
     if (r.near) d.rect(x - NEAR_PAD, y - h / 2 - NEAR_PAD, w + 2 * NEAR_PAD, h + 2 * NEAR_PAD, { stroke: BLACK, sw: 0.95, dash: NEAR_DASH });
     d.rect(x, y - h / 2, w, h, { fill: r.c });
     d.text(x + w / 2, y - fs * 0.35, label, "F-Bold", fs, r.t || WHITE, { anchor: "middle" });
@@ -553,9 +571,17 @@
     let g = `<g transform="translate(${n2(x)} ${top}) scale(${Math.round(k * 10000) / 10000})" shape-rendering="crispEdges">`;
     g += `<rect width="${dim}" height="${dim}" fill="#fff"/><path d="${path}" fill="${INK}"/>`;
     if (logo) {
+      // black and white: the mark is run through a grey-scale filter (with a little more contrast)
+      if (BWM) {
+        g +=
+          '<defs><filter id="bkkGray" color-interpolation-filters="sRGB">' +
+          '<feColorMatrix type="matrix" values="0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0 0 0 1 0"/>' +
+          '<feComponentTransfer><feFuncR type="linear" slope="1.35" intercept="-0.18"/><feFuncG type="linear" slope="1.35" intercept="-0.18"/>' +
+          '<feFuncB type="linear" slope="1.35" intercept="-0.18"/></feComponentTransfer></filter></defs>';
+      }
       const lw = dim * 0.28;
       const o = (dim - lw) / 2;
-      g += `<circle cx="${dim / 2}" cy="${dim / 2}" r="${n2(lw * 0.56)}" fill="#fff"/><image href="${logo}" x="${n2(o)}" y="${n2(o)}" width="${n2(lw)}" height="${n2(lw)}"/>`;
+      g += `<circle cx="${dim / 2}" cy="${dim / 2}" r="${n2(lw * 0.56)}" fill="#fff"/><image href="${logo}" x="${n2(o)}" y="${n2(o)}" width="${n2(lw)}" height="${n2(lw)}"${BWM ? ' filter="url(#bkkGray)"' : ""}/>`;
     }
     g += "</g>";
     d.raw(g);
@@ -694,7 +720,7 @@
     for (let i = 0; i < items.length; i++) {
       const spur = items[i + 1] && items[i + 1].spurStart;
       gapC.push(Ls[i].need + (spur ? 12 : 0));
-      gapMin.push(Ls[i].minNeed + (spur ? 8 : 0));
+      gapMin.push(Ls[i].minNeed + (spur ? 11 : 0));
     }
     return { gapC, gapMin };
   }
@@ -861,7 +887,22 @@
    * Option "plainTransfers": every transfer route is listed once, with no "+"
    * between groups and no walking distances; the key loses its walking row.
    */
+  /** Option "bw": every route colour becomes black (white lettering); see setPalette. */
+  function withBw(cfg) {
+    const black = (r) => ({ ...r, c: BLACK, t: WHITE });
+    return {
+      ...cfg,
+      bw: true,
+      routes: cfg.routes.map((t) => ({ ...t, color: BLACK, textColor: WHITE })),
+      dests: cfg.dests.map((x) => ({ ...x, color: BLACK })),
+      items: cfg.items.map((it) =>
+        it.groups && it.groups.length ? { ...it, groups: it.groups.map((g) => ({ ...g, routes: g.routes.map(black) })) } : it
+      ),
+    };
+  }
+
   function withOptions(cfg, opts) {
+    if (opts.bw && !cfg.bw) cfg = withBw(cfg);
     if (opts.textSigns && !cfg.textSigns) cfg = withTextSigns(cfg);
     if (!opts.plainTransfers || cfg.plainTransfers) return cfg;
     const items = cfg.items.map((it) => {
@@ -1158,7 +1199,12 @@
         while (e + 1 < rows.length && rows[e + 1].it.lane && !rows[e + 1].it.spurStart) e++;
         const yPrev = k > 0 ? rows[k - 1].y : yStart;
         const gap = yPrev - rows[k].y;
-        const y1 = yPrev - Math.max(8, Math.min(24, gap * 0.5));
+        // The branch leaves below the previous stop's transfer badges (its curve sweeps right
+        // over the badge area), never through them.
+        const prevBottom = k > 0 ? rows[k - 1].L.bottom : 0;
+        let off = Math.max(8, Math.min(24, gap * 0.5));
+        off = Math.max(off, Math.min(prevBottom + 5, gap - 14));
+        const y1 = yPrev - off;
         const sp = { k, e, y1, join: null };
         if (rows[e].it.rejoin) {
           const yE = rows[e].y;
@@ -1176,7 +1222,7 @@
       if (c === 0) {
         // In the stop bar the line comes in from above as heavy dashes (unless
         // every trip starts here) and leaves through the bottom of the bar.
-        const inBar = RC;
+        const inBar = BWM ? WHITE : RC; // black bar: the line is white inside it
         d.line(LX, yStart, LX, barTop - bar.h, { stroke: inBar, sw: 5 });
         if (!cfg.startsHere) {
           // dashes up to the top of the bar, the last one poking out a little
@@ -1216,7 +1262,12 @@
       for (const r of rows) {
         const { it, L, y } = r;
         const lx = it.lane ? SX : LX;
-        if (it.terminal) {
+        if (it.terminal && BWM) {
+          // bullseye
+          d.circle(lx, y, 6.8, { fill: BLACK });
+          d.circle(lx, y, 5, { fill: WHITE });
+          d.circle(lx, y, 3.4, { fill: BLACK });
+        } else if (it.terminal) {
           d.circle(lx, y, 6.4, { fill: AMBER });
           d.circle(lx, y, 4.4, { fill: LED_BG });
         } else {
@@ -1285,7 +1336,7 @@
 
   function drawBand(d, cfg, dest, x, y, w, RX1) {
     // light tint of the route color, "towards" label, amber destination sign
-    d.rect(x, y - BAND_H, w, BAND_H, { fill: tint(dest.color, 0.16), r: 3 });
+    d.rect(x, y - BAND_H, w, BAND_H, BWM ? { fill: "#ececec", stroke: BLACK, sw: 0.9, r: 3 } : { fill: tint(dest.color, 0.16), r: 3 });
     let bx = x + 10;
     if (cfg.routes.length > 1) {
       for (const rn of dest.tiles && dest.tiles.length ? dest.tiles : dest.routes) {
@@ -1364,7 +1415,7 @@
   }
 
   function drawLegend(d, cfg, RX0, RWd, lgTop, legH) {
-    d.rect(RX0, lgTop - legH, RWd, legH, { fill: "#f3f1ed", r: 4 });
+    d.rect(RX0, lgTop - legH, RWd, legH, BWM ? { fill: "#f4f4f4", stroke: BLACK, sw: 0.9, r: 4 } : { fill: "#f3f1ed", r: 4 });
     const lx = RX0 + 10;
     let ly = lgTop - 17;
     const kw = 36;
@@ -1392,10 +1443,10 @@
     const ly4 = ly3 - 22;
     let bx = lx;
     for (const r of [
-      { n: "A", c: "#EE3325" },
-      { n: "B", c: "#80BC00" },
+      { n: "A", c: BWM ? BLACK : "#EE3325" },
+      { n: "B", c: BWM ? BLACK : "#80BC00" },
       // plain mode: F stands for a near transfer (dashed outline), set apart from A and B
-      ...(cfg.plainTransfers ? [{ n: "F", c: NAVY, near: true, gap: true }] : [{ n: "F", c: NAVY }]),
+      ...(cfg.plainTransfers ? [{ n: "F", c: BWM ? BLACK : NAVY, near: true, gap: true }] : [{ n: "F", c: BWM ? BLACK : NAVY }]),
     ]) {
       if (r.gap) bx += 4;
       bx = badge(d, bx, ly4, r, 11, 7.8) + (r.near ? 1.2 : 0);
@@ -1407,13 +1458,13 @@
       const nx0 = tx0 + sw(a, "F-Reg", 8.4) + 4;
       const nw = sw("near", "F-Reg", 8.4) + 6;
       d.text(tx0, ly4 - 3.0, a, "F-Reg", 8.4, INK);
-      d.rect(nx0, ly4 - 6.6, nw, 11.4, { stroke: BLACK, sw: 0.95, dash: NEAR_DASH });
+      d.rect(nx0, ly4 - 6.6, nw, 11.4, { stroke: BLACK, sw: BWM ? 1 : 0.95, dash: NEAR_DASH });
       d.text(nx0 + 3, ly4 - 3.0, "near", "F-Reg", 8.4, INK);
       d.text(nx0 + nw + 4, ly4 - 3.0, "the listed stop", "F-Reg", 8.4, INK);
     } else d.text(tx0, ly4 - 3.0, "Transfer to other routes at the listed stop", "F-Reg", 8.4, INK);
     const ly5 = ly4 - 22;
     if (!cfg.plainTransfers) {
-      drawTransferLine(d, layoutTransfers([{ routes: [{ n: "R", c: NAVY }], walk: 200 }], lx, 999).lines[0], ly5);
+      drawTransferLine(d, layoutTransfers([{ routes: [{ n: "R", c: BWM ? BLACK : NAVY }], walk: 200 }], lx, 999).lines[0], ly5);
       d.text(tx0, ly5 - 3.0, "Walk to nearby transfer opportunity", "F-Reg", 8.4, INK);
     }
     let my = cfg.plainTransfers ? ly4 : ly5;
@@ -1457,7 +1508,7 @@
 
     const ybh = 27;
     const yby = FB + 64 - ybh;
-    d.rect(RX0, yby, RWd, ybh, { fill: YELLOW, r: 3 });
+    d.rect(RX0, yby, RWd, ybh, BWM ? { fill: WHITE, stroke: BLACK, sw: 1.6, r: 3 } : { fill: YELLOW, r: 3 });
     d.circle(RX0 + 15, yby + ybh / 2, 8, { stroke: INK, sw: 1.8 });
     d.text(RX0 + 15, yby + ybh / 2 - 4.3, "!", "F-Bold", 12, INK, { anchor: "middle" });
     const t1 = "Check for detours and holidays";
@@ -1535,12 +1586,13 @@
   function render(cfg, opts) {
     opts = opts || {};
     cfg = withOptions(cfg, opts);
+    setPalette(!!cfg.bw);
     const P = plan(cfg, opts);
     const { W, H, HB } = P;
     const d = new Doc(W, H);
     const RC = cfg.routes[0] ? cfg.routes[0].color : NAVY;
     // navy routes get a dimmer bar so their line still shows against it
-    const BAR = norm(RC) === norm(NAVY) ? BAR_BG_DIM : BAR_BG;
+    const BAR = BWM ? BLACK : norm(RC) === norm(NAVY) ? BAR_BG_DIM : BAR_BG;
 
     d.rect(0, 0, W, H, { fill: WHITE });
     const hl = drawHeader(d, cfg, W, HB, RC);

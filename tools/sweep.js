@@ -27,6 +27,7 @@ const modes = [
   { name: "letter+plain", opts: { fit: "letter", plainTransfers: true } },
   { name: "landscape", opts: { fit: "letter", orientation: "landscape" } },
   { name: "letter+text+plain", opts: { fit: "letter", textSigns: true, plainTransfers: true } },
+  { name: "letter+bw", opts: { fit: "letter", bw: true } },
 ];
 const stat = modes.map(() => ({ n: 0, errors: 0, cutOff: new Map(), scales: {} }));
 const t0 = Date.now();
