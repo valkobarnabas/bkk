@@ -840,6 +840,7 @@
             }
           }
           tiles.sort((a, b) => S.compareBoardCodes(a.label, b.label));
+          tagPartialStops(ctx, items, insts, tiles, routeNamesHere);
           for (const dd of dests) {
             dd.tiles = (dd.codes || []).filter((c) => tiles.some((t) => t.label === c));
           }
@@ -872,6 +873,30 @@
       // lettered routes before numbered ones (C, then 38); a route's own order is kept
       posters.sort((a, b) => S.compareBoardCodes(a.routes[0].label, b.routes[0].label));
       return mergeSchoolPosters(posters);
+    }
+
+    /**
+     * On a merged poster where one route runs everywhere and a partner only adds a few stops
+     * (the D on the 75), the stops that only the partner serves carry its tile, left of the name.
+     */
+    const PARTIAL_TAGS = [{ main: "75", tag: "D" }];
+    function tagPartialStops(ctx, items, insts, tiles, routeNames) {
+      const have = new Set(routeNames.map(low));
+      for (const rule of PARTIAL_TAGS) {
+        if (!have.has(low(rule.main)) || !have.has(low(rule.tag))) continue;
+        const tile = tiles.find((t) => low(t.route) === low(rule.tag));
+        if (!tile) continue;
+        const servedBy = (it) => {
+          const codes = new Set((it.codes || [it.code]).map(String));
+          const set = new Set();
+          for (const i of insts) if ((i.remaining || []).some((c) => codes.has(String(c)))) set.add(low(i.r));
+          return set;
+        };
+        for (const it of items) {
+          const by = servedBy(it);
+          if (by.has(low(rule.tag)) && !by.has(low(rule.main))) it.tags = [{ n: tile.label, c: tile.color }];
+        }
+      }
     }
 
     /**

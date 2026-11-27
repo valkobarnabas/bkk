@@ -22,6 +22,7 @@
  *                      and no walking row in the key
  *   --text-signs       no headboard (LED) signs: destinations are plain text on the bands,
  *                      and where trips end a note says "(Trips towards X terminate here)"
+ *   --no-stop-numbers  leave the stop numbers off the diagram (the current stop keeps its own)
  *   --bw               black-and-white design for B/W printing: solid black routes, near transfers
  *                      as white dashed boxes, white-on-black signs, darker greys, no colour at all
  *   --format LIST      svg (default), html, pdf  (pdf needs Edge or Chrome)
@@ -58,6 +59,7 @@ function parseArgs(argv) {
     else if (k === "--no-plain-transfers") a.plainTransfers = false;
     else if (k === "--plain-transfers") a.plainTransfers = true;
     else if (k === "--text-signs") a.textSigns = true;
+    else if (k === "--no-stop-numbers") a.noIds = true;
     else if (k === "--bw") a.bw = true;
     else if (k === "--landscape") (a.fit = "letter"), (a.orientation = "landscape");
     else if (k === "--format") a.format = next();
@@ -143,7 +145,7 @@ function main() {
   if (formats.has("pdf") && !browser) console.error("No Edge/Chrome found for PDF output (set BKK_BROWSER). Writing HTML instead.");
 
   posters.forEach((cfg, i) => {
-    const res = Poster.render(cfg, { logo, fontCss, cols: args.cols, height: args.height, fit: args.fit, orientation: args.orientation, plainTransfers: args.plainTransfers, textSigns: args.textSigns, bw: args.bw });
+    const res = Poster.render(cfg, { logo, fontCss, cols: args.cols, height: args.height, fit: args.fit, orientation: args.orientation, plainTransfers: args.plainTransfers, textSigns: args.textSigns, bw: args.bw, noIds: args.noIds });
     const base = path.join(
       args.out,
       `${slug(cfg.routes.map((r) => r.label).join("-"))}-${cfg.stopId}${posters.length > 1 ? "-" + (i + 1) : ""}`

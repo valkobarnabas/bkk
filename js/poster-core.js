@@ -327,6 +327,8 @@
   const NAME_FS = 10;
   const NAME_PITCH = 11.5;
   const XFER_PITCH = 12.5;
+  const ID_FS = 6.5; // stop number text
+  const ALT_ID_FS = 5.9; // ... for an "or ..." stop
   const ALSO_GAP = 3.2; // extra space between a boxed terminus and its "or ..." stop
 
   /**
@@ -339,23 +341,28 @@
     const nx = lane + 14;
     const xmax = COL_W - 2;
     const font = isFinal && !it.lane ? "F-Bold" : "F-Semi";
-    const idTxt = `#${it.id}`;
-    let idW = sw(idTxt, "F-Reg", 7) + 4;
+    const idTxt = it.noId ? "" : `#${it.id}`;
+    let idW = it.noId ? 0 : sw(idTxt, "F-Reg", ID_FS) + 3;
     if (it.marker) idW += 11;
 
+    // a tile (the D on a 75/D poster) left of the name for stops only that route serves
+    const tags = it.tags && it.tags.length ? it.tags : null;
+    const tagW = tags ? tags.reduce((s, t) => s + badgeW(t.n) + 1.8, 0) + 2.6 : 0;
+    const nxn = nx + tagW; // where the name starts
+
     let fs = NAME_FS;
-    let lines = wrapName(it.name, font, fs, xmax - nx - idW);
-    while ((lines.length > 2 || lines.some((l) => sw(l, font, fs) > xmax - nx - idW)) && fs > 8.5) {
+    let lines = wrapName(it.name, font, fs, xmax - nxn - idW);
+    while ((lines.length > 2 || lines.some((l) => sw(l, font, fs) > xmax - nxn - idW)) && fs > 8.5) {
       fs -= 0.5;
-      lines = wrapName(it.name, font, fs, xmax - nx - idW);
+      lines = wrapName(it.name, font, fs, xmax - nxn - idW);
     }
-    if (lines.length > 3) lines = wrapName(it.name, font, fs, xmax - nx - idW, 3);
+    if (lines.length > 3) lines = wrapName(it.name, font, fs, xmax - nxn - idW, 3);
     // A name that fits on one line by itself but not beside its stop number stays on one line
-    // (a wrapped name makes a tall, narrow black box at a terminus); the number drops onto a
-    // small grey line of its own below it.
+    // (a wrapped name makes a tall, narrow black box at a terminus); the number then goes
+    // below it, flush left with the name block.
     let idBelow = false;
     if (lines.length > 1) {
-      const room = xmax - nx - 1;
+      const room = xmax - nxn - 1;
       let f1 = NAME_FS;
       while (sw(it.name, font, f1) > room && f1 > 9) f1 -= 0.5;
       if (sw(it.name, font, f1) <= room) {
@@ -364,42 +371,32 @@
         idBelow = sw(it.name, font, f1) + idW > room;
       }
     }
-    if (!idBelow) lines = lines.map((l) => ellipsize(l, font, fs, xmax - nx - (l === lines[lines.length - 1] ? idW : 0)));
-    // distance from the name's baseline to the number's, and the space it adds
-    const idStep = idBelow ? (it.terminal ? 13 : 8.6) : 0;
-    const idExtra = idBelow ? idStep - 2 : 0;
+    if (!idBelow) lines = lines.map((l) => ellipsize(l, font, fs, xmax - nxn - (l === lines[lines.length - 1] ? idW : 0)));
 
     const also = [];
     for (const a of it.also || []) {
       // wraps onto a second line rather than being cut off; the id follows the last line
-      const room = xmax - nx - sw(`#${a.id}`, "F-Reg", 6.4) - 4;
-      const ls = wrapName(`or ${a.name}`, "F-Semi", 8.6, room, 2);
-      ls.forEach((text, li) => also.push({ text, id: li === ls.length - 1 ? a.id : null }));
+      const room = xmax - nx - (it.noId ? 0 : sw(`#${a.id}`, "F-Reg", ALT_ID_FS) + 3);
+      let af = 8.6;
+      while (sw(`or ${a.name}`, "F-Semi", af) > room && af > 7.8) af -= 0.2;
+      const ls = wrapName(`or ${a.name}`, "F-Semi", af, room, 2);
+      ls.forEach((text, li) => also.push({ text, fs: af, id: li === ls.length - 1 && !it.noId ? a.id : null }));
     }
     // when trips end at the other stop: small italic lines right under it (3/4 line each)
-    let nameLines = lines.length + idExtra / NAME_PITCH + also.length + (also.length ? ALSO_GAP / NAME_PITCH : 0);
+    let baseLines = lines.length + also.length;
     if (also.length && it.alsoWhen) {
       for (const l of wrapText(it.alsoWhen, "F-Ital", 7, xmax - nx, 2)) {
         also.push({ text: l, sub: true });
-        nameLines += 0.72;
+        baseLines += 0.72;
       }
     }
 
-    // transfers, then chips
+    // transfers, then chips (x positions only; heights are worked out below)
     const xf = it.groups && it.groups.length ? layoutTransfers(it.groups, nx, xmax) : null;
-    let k = nameLines - 1; // index of the last occupied line, in name-line units
-    const L = { lane, nx, font, fs, lines, also, idTxt, xf, chips: [], noteLines: [], nameLines, idBelow, idStep, idExtra };
-    let bottom = 9 + NAME_PITCH * (nameLines - 1);
-    let yOff = 15 + NAME_PITCH * (nameLines - 1); // center of the first transfer/chip line
-    let used = 0; // lines used below the name
-    let endX = nx - 6;
-    if (xf) {
-      used = xf.lines.length;
-      endX = xf.endX;
-      bottom = yOff + XFER_PITCH * (used - 1) + 5.4;
-    }
+    const L = { lane, nx, nxn, tags, font, fs, lines, also, idTxt, xf, chips: [], noteLines: [], idBelow, idStep: 0, idExtra: 0 };
+    const used = xf ? xf.lines.length : 0; // lines used below the name
     let curLine = xf ? used - 1 : -1; // transfer line index the chips continue on
-    let cx = xf ? endX : nx - 6;
+    let cx = xf ? xf.endX : nx - 6;
     for (const sign of it.chips || []) {
       const cw = ledWidth(sign);
       if (curLine < 0 || cx + 6 + cw > xmax) {
@@ -408,8 +405,27 @@
       }
       L.chips.push({ sign, x: cx + 6, line: curLine, w: cw });
       cx = cx + 6 + cw;
-      bottom = Math.max(bottom, yOff + XFER_PITCH * curLine + 5.9);
     }
+
+    // Stop number below the name: flush left with the name block, on a small line of its own.
+    const nameW = Math.max(...lines.map((l) => sw(l, font, fs)));
+    const boxed = !!it.terminal;
+    if (idBelow) {
+      L.idX = nx;
+      L.idShared = false;
+      L.idStep = boxed ? 11.8 : 7.8; // baseline distance from the name's
+      L.idExtra = L.idStep - 2.6;
+    }
+
+    // an "or ..." stop under a black terminus box needs a little air, unless the number's line
+    // already sits between them
+    L.alsoGap = also.length && !L.idExtra ? ALSO_GAP : 0;
+    const nameLines = baseLines + L.idExtra / NAME_PITCH + L.alsoGap / NAME_PITCH;
+    L.nameLines = nameLines;
+    let bottom = 9 + NAME_PITCH * (nameLines - 1);
+    const yOff = 15 + NAME_PITCH * (nameLines - 1); // center of the first transfer/chip line
+    if (xf) bottom = yOff + XFER_PITCH * (used - 1) + 5.4;
+    for (const ch of L.chips) bottom = Math.max(bottom, yOff + XFER_PITCH * ch.line + 5.9);
     L.yOff = yOff;
     L.termLines = [];
     if (it.endNote) {
@@ -924,8 +940,14 @@
     };
   }
 
+  /** Option "noIds": no stop numbers on the diagram (the current stop keeps its own in the bar). */
+  function withNoIds(cfg) {
+    return { ...cfg, noIds: true, items: cfg.items.map((it) => ({ ...it, noId: true })) };
+  }
+
   function withOptions(cfg, opts) {
     if (opts.bw && !cfg.bw) cfg = withBw(cfg);
+    if (opts.noIds && !cfg.noIds) cfg = withNoIds(cfg);
     if (opts.textSigns && !cfg.textSigns) cfg = withTextSigns(cfg);
     if (!opts.plainTransfers || cfg.plainTransfers) return cfg;
     const items = cfg.items.map((it) => {
@@ -1321,23 +1343,34 @@
         // Termini: white name on a black box, so it is clear the route stops here
         const boxed = !!it.terminal;
         const padX = boxed ? 4 : 0;
+        const nameX = ox + L.nxn;
+        // route tile(s) for stops only a partner route serves (the D on a 75/D poster)
+        if (L.tags) {
+          let tx = ox + L.nx;
+          for (const tg of L.tags) tx = badge(d, tx, ly + L.fs * 0.3, { n: tg.n, c: BWM ? BLACK : tg.c }, 10.5, 7.6);
+        }
         if (boxed) {
           const wMax = Math.max(...L.lines.map((ln) => sw(ln, L.font, L.fs)));
           const top = ly + L.fs * 0.86 + 2.2;
           const bot = ly - (L.lines.length - 1) * NAME_PITCH - L.fs * 0.26 - 2.2;
-          d.rect(ox + L.nx - padX, bot, wMax + 2 * padX, top - bot, { fill: BLACK, r: 2 });
+          d.rect(nameX - padX, bot, wMax + 2 * padX, top - bot, { fill: BLACK, r: 2 });
         }
         L.lines.forEach((ln, li) => {
-          d.text(ox + L.nx, ly, ln, L.font, L.fs, boxed ? WHITE : INK);
+          d.text(nameX, ly, ln, L.font, L.fs, boxed ? WHITE : INK);
           if (li === L.lines.length - 1) {
             const nw = sw(ln, L.font, L.fs);
             const wBox = boxed ? Math.max(...L.lines.map((l2) => sw(l2, L.font, L.fs))) + padX : nw;
-            // the number sits beside the last name line, or on its own small line below it
-            const ix = L.idBelow ? ox + L.nx : ox + L.nx + wBox + 4;
-            const iy = L.idBelow ? ly - L.idStep : ly;
-            d.text(ix, iy, L.idTxt, "F-Reg", 7, GREY);
+            // the number sits beside the last name line, or below it flush left with the name block
+            // (on a small line of its own)
+            let ix = nameX + wBox + 3;
+            let iy = ly;
+            if (L.idBelow) {
+              ix = ox + L.idX;
+              iy = L.idShared ? y - L.yOff - 2.6 : ly - L.idStep;
+            }
+            if (L.idTxt) d.text(ix, iy, L.idTxt, "F-Reg", ID_FS, GREY);
             if (it.marker) {
-              const mx = ix + sw(L.idTxt, "F-Reg", 7) + 7;
+              const mx = ix + (L.idTxt ? sw(L.idTxt, "F-Reg", ID_FS) + 7 : 4.5);
               d.circle(mx, iy + 2.6, 4.3, { fill: DGREY });
               d.text(mx, iy + 0.2, it.marker, "F-Bold", 6.4, WHITE, { anchor: "middle" });
             }
@@ -1345,15 +1378,15 @@
           ly -= NAME_PITCH;
         });
         ly -= L.idExtra;
-        if (L.also.length) ly -= ALSO_GAP; // clear of the black terminus box
+        ly -= L.alsoGap; // clear of the black terminus box
         for (const a of L.also) {
           if (a.sub) {
             d.text(ox + L.nx, ly + 1.5, a.text, "F-Ital", 7, GREY);
             ly -= NAME_PITCH * 0.72;
             continue;
           }
-          d.text(ox + L.nx, ly, a.text, "F-Semi", 8.6, DGREY);
-          if (a.id != null) d.text(ox + L.nx + sw(a.text, "F-Semi", 8.6) + 4, ly, `#${a.id}`, "F-Reg", 6.4, GREY);
+          d.text(ox + L.nx, ly, a.text, "F-Semi", a.fs || 8.6, DGREY);
+          if (a.id != null) d.text(ox + L.nx + sw(a.text, "F-Semi", a.fs || 8.6) + 3, ly, `#${a.id}`, "F-Reg", ALT_ID_FS, GREY);
           ly -= NAME_PITCH;
         }
         // transfers

@@ -11,7 +11,7 @@
 
   const $ = (id) => document.getElementById(id);
   const qEl = $("q"), resultsEl = $("results"), pickedEl = $("picked"), routesEl = $("routes");
-  const noSchoolEl = $("noschool"), mergeEl = $("merge"), letterEl = $("letter"), plainEl = $("plain"), textEl = $("textsigns"), bwEl = $("bw"), goEl = $("go"), errEl = $("err"), outEl = $("out");
+  const noSchoolEl = $("noschool"), mergeEl = $("merge"), letterEl = $("letter"), plainEl = $("plain"), textEl = $("textsigns"), bwEl = $("bw"), noIdsEl = $("noids"), goEl = $("go"), errEl = $("err"), outEl = $("out");
 
   let pack = null, ctx = null, selected = null, logo = null;
   let posterCount = 0;
@@ -173,6 +173,7 @@
   const plainOpt = () => plainEl.checked;
   const textOpt = () => textEl.checked;
   const bwOpt = () => bwEl.checked;
+  const noIdsOpt = () => noIdsEl.checked;
 
   function addCard(cfg, firstRes) {
     const base = `${slug(cfg.routes.map((r) => r.label).join("-"))}-${cfg.stopId}`;
@@ -214,7 +215,7 @@
           : `Rotate to landscape (${there}% instead of ${here}%)`;
       }
     };
-    const render = (extra) => Poster.render(cfg, Object.assign({ logo, fit: fitOpt(), orientation, plainTransfers: plainOpt(), textSigns: textOpt(), bw: bwOpt() }, extra || {}));
+    const render = (extra) => Poster.render(cfg, Object.assign({ logo, fit: fitOpt(), orientation, plainTransfers: plainOpt(), textSigns: textOpt(), bw: bwOpt(), noIds: noIdsOpt() }, extra || {}));
     paint(firstRes);
     // a rotated poster keeps its choice, and always offers the way back
     const showRotateBack = (res) => {
@@ -274,7 +275,7 @@
     let made = 0;
     for (const cfg of posters) {
       try {
-        addCard(cfg, Poster.render(cfg, { logo, fit: fitOpt(), plainTransfers: plainOpt(), textSigns: textOpt(), bw: bwOpt() }));
+        addCard(cfg, Poster.render(cfg, { logo, fit: fitOpt(), plainTransfers: plainOpt(), textSigns: textOpt(), bw: bwOpt(), noIds: noIdsOpt() }));
         made++;
       } catch (err) {
         showErr(`${cfg.routes.map((r) => r.label).join(" + ")}: ${err.message || err}`);
@@ -291,6 +292,7 @@
     if (!letterEl.checked) p.set("letter", "0");
     if (!plainEl.checked) p.set("plain", "0");
     if (textEl.checked) p.set("text", "1");
+    if (noIdsEl.checked) p.set("noids", "1");
     if (bwEl.checked) p.set("bw", "1");
     history.replaceState(null, "", "?" + p.toString());
   }
@@ -307,6 +309,7 @@
     if (params.get("letter") === "0") letterEl.checked = false;
     if (params.get("plain") === "0") plainEl.checked = false;
     if (params.get("text") === "1") textEl.checked = true;
+    if (params.get("noids") === "1") noIdsEl.checked = true;
     if (params.get("bw") === "1") bwEl.checked = true;
     showPicked(stop);
     const route = params.get("route");
