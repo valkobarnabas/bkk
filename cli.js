@@ -13,11 +13,12 @@
  *                      from this stop are merged into one poster
  *   --no-merge         one poster per route instead
  *   --school           include school-extra routes
- *   --letter           always output a US Letter page (portrait or landscape);
+ *   --no-letter / --no-plain-transfers   turn off the two defaults below
+ *   --letter           (default) always output a US Letter page (portrait or landscape);
  *                      big posters are shrunk to fit, so the type gets smaller.
  *                      Stays portrait; the log says what --landscape would print at
  *   --landscape        like --letter, but on a landscape sheet
- *   --plain-transfers  list every transfer route once: no "+", no walking distances,
+ *   --plain-transfers  (default) list every transfer route once: no "+", no walking distances,
  *                      and no walking row in the key
  *   --text-signs       no headboard (LED) signs: destinations are plain text on the bands,
  *                      and where trips end a note says "(Trips towards X terminate here)"
@@ -42,7 +43,7 @@ const Poster = require("./js/poster-core.js");
 const Search = require("./js/search.js");
 
 function parseArgs(argv) {
-  const a = { format: "svg", out: "out", merge: true, school: false };
+  const a = { format: "svg", out: "out", merge: true, school: false, fit: "letter", plainTransfers: true };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const next = () => argv[++i];
@@ -53,6 +54,8 @@ function parseArgs(argv) {
     else if (k === "--no-merge") a.merge = false;
     else if (k === "--school") a.school = true;
     else if (k === "--letter") a.fit = "letter";
+    else if (k === "--no-letter") a.fit = undefined;
+    else if (k === "--no-plain-transfers") a.plainTransfers = false;
     else if (k === "--plain-transfers") a.plainTransfers = true;
     else if (k === "--text-signs") a.textSigns = true;
     else if (k === "--bw") a.bw = true;

@@ -48,6 +48,7 @@
 
   const DASH_LEN = 1.8; // "continues" dashes on the route line
   const DASH_PITCH = 2.8;
+  const TAIL_LEN = 7; // solid line between the last stop of a column and the dashes
   const PORTRAIT_MIN = 0.5; // fit-to-letter stays upright unless it must shrink below this
   const LETTER_W = 612; // US Letter, points
   const LETTER_H = 792;
@@ -349,7 +350,24 @@
       lines = wrapName(it.name, font, fs, xmax - nx - idW);
     }
     if (lines.length > 3) lines = wrapName(it.name, font, fs, xmax - nx - idW, 3);
-    lines = lines.map((l) => ellipsize(l, font, fs, xmax - nx - (l === lines[lines.length - 1] ? idW : 0)));
+    // A name that fits on one line by itself but not beside its stop number stays on one line
+    // (a wrapped name makes a tall, narrow black box at a terminus); the number drops onto a
+    // small grey line of its own below it.
+    let idBelow = false;
+    if (lines.length > 1) {
+      const room = xmax - nx - 1;
+      let f1 = NAME_FS;
+      while (sw(it.name, font, f1) > room && f1 > 9) f1 -= 0.5;
+      if (sw(it.name, font, f1) <= room) {
+        lines = [it.name];
+        fs = f1;
+        idBelow = sw(it.name, font, f1) + idW > room;
+      }
+    }
+    if (!idBelow) lines = lines.map((l) => ellipsize(l, font, fs, xmax - nx - (l === lines[lines.length - 1] ? idW : 0)));
+    // distance from the name's baseline to the number's, and the space it adds
+    const idStep = idBelow ? (it.terminal ? 13 : 8.6) : 0;
+    const idExtra = idBelow ? idStep - 2 : 0;
 
     const also = [];
     for (const a of it.also || []) {
@@ -359,7 +377,7 @@
       ls.forEach((text, li) => also.push({ text, id: li === ls.length - 1 ? a.id : null }));
     }
     // when trips end at the other stop: small italic lines right under it (3/4 line each)
-    let nameLines = lines.length + also.length + (also.length ? ALSO_GAP / NAME_PITCH : 0);
+    let nameLines = lines.length + idExtra / NAME_PITCH + also.length + (also.length ? ALSO_GAP / NAME_PITCH : 0);
     if (also.length && it.alsoWhen) {
       for (const l of wrapText(it.alsoWhen, "F-Ital", 7, xmax - nx, 2)) {
         also.push({ text: l, sub: true });
@@ -370,7 +388,7 @@
     // transfers, then chips
     const xf = it.groups && it.groups.length ? layoutTransfers(it.groups, nx, xmax) : null;
     let k = nameLines - 1; // index of the last occupied line, in name-line units
-    const L = { lane, nx, font, fs, lines, also, idTxt, xf, chips: [], noteLines: [], nameLines };
+    const L = { lane, nx, font, fs, lines, also, idTxt, xf, chips: [], noteLines: [], nameLines, idBelow, idStep, idExtra };
     let bottom = 9 + NAME_PITCH * (nameLines - 1);
     let yOff = 15 + NAME_PITCH * (nameLines - 1); // center of the first transfer/chip line
     let used = 0; // lines used below the name
@@ -591,6 +609,7 @@
   // ------------------------------------------------------------ time tables
   const BAND_H = 26;
   const BAND_GAP = 6;
+  const ASTERISKS = ["*", "\u00a7"];
   const DAY_H = 23;
   const BGAP = 8;
   const DGAP = 16;
@@ -620,15 +639,19 @@
     const dests = cfg.dests.filter((x) => x.blocks.length);
     const units = [];
     dests.forEach((dest, di) => {
-      const nl = noteLinesFor(dest).length;
       dest.blocks.forEach((b, bi) => {
         const last = bi === dest.blocks.length - 1;
+        // notes under a block: its own (asterisk) notes, then the destination's after the last one
+        const own = [];
+        for (const n of b.notes || []) for (const l of wrapText(n, "F-Ital", 7.2, RW - 2, 2)) own.push(l);
+        const lines = own.concat(last ? noteLinesFor(dest) : []);
+        const nl = lines.length;
         units.push({
           kind: bi === 0 ? "head" : "block",
           dest,
           block: b,
-          notes: last ? noteLinesFor(dest) : null,
-          h: blockH(b, cols, bh, gap) + (last && nl ? 4 + nl * 8.8 : 0),
+          notes: nl ? lines : null,
+          h: blockH(b, cols, bh, gap) + (nl ? 4 + nl * 8.8 : 0),
           newDest: bi === 0 && di > 0,
         });
       });
@@ -1218,12 +1241,28 @@
         spurs.push(sp);
       }
 
-      d.line(LX, yStart, LX, lastMainY, { stroke: RC, sw: 5 });
+      // below the last stop of a column that carries on, a short stretch of line runs out of the
+      // node before the dashes begin (mirrors the line that leads into the first stop up top)
+      const tail = c < P.cols.length - 1 && endsAtRow ? 5.6 + TAIL_LEN : 0;
+      d.line(LX, yStart, LX, lastMainY - tail, { stroke: RC, sw: 5 });
       if (c === 0) {
         // In the stop bar the line comes in from above as heavy dashes (unless
         // every trip starts here) and leaves through the bottom of the bar.
-        const inBar = BWM ? WHITE : RC; // black bar: the line is white inside it
-        d.line(LX, yStart, LX, barTop - bar.h, { stroke: inBar, sw: 5 });
+        const inBar = RC; // the route line keeps its own color inside the bar
+        // a thin white outline keeps the line (navy, or black in b/w) from sinking into the dark bar
+        const outlined = true;
+        // `ends`: the outline also wraps the ends of a dash (a long line only needs its sides)
+        const inLine = (y0, y1, ends) => {
+          // an outlined dash is drawn a little shorter so its outline leaves a visible gap
+          const t = ends && outlined ? 0.6 : 0;
+          const e = ends ? 1.2 - t : 0;
+          if (outlined) d.line(LX, Math.min(y0, y1) - e, LX, Math.max(y0, y1) + e, { stroke: WHITE, sw: 7.4 });
+          d.line(LX, y0 + t, LX, y1 - t, { stroke: inBar, sw: 5 });
+        };
+        inLine(yStart, barTop - bar.h);
+        // the navy runs a little past the bar's edge, over the outline's antialiased end, so the
+        // line inside and outside the bar join without a pale seam
+        if (outlined) d.line(LX, barTop - bar.h + 2, LX, barTop - bar.h - 2, { stroke: inBar, sw: 5 });
         if (!cfg.startsHere) {
           // dashes up to the top of the bar, the last one poking out a little
           const half = bar.h / 2;
@@ -1232,11 +1271,11 @@
           const shift = half + 3 - (starts[starts.length - 1] + 5.2);
           for (const o of starts) {
             const y0 = yStart + o + shift;
-            d.line(LX, y0, LX, y0 + 5.2, { stroke: inBar, sw: 5 });
+            inLine(y0, y0 + 5.2, true);
           }
         }
       }
-      if (c < P.cols.length - 1) dashes(lastMainY - (endsAtRow ? 5.6 : 0) - (DASH_PITCH - DASH_LEN), RC);
+      if (c < P.cols.length - 1) dashes(lastMainY - tail - (DASH_PITCH - DASH_LEN), RC);
 
       for (const sp of spurs) {
         const pts = [
@@ -1293,15 +1332,19 @@
           if (li === L.lines.length - 1) {
             const nw = sw(ln, L.font, L.fs);
             const wBox = boxed ? Math.max(...L.lines.map((l2) => sw(l2, L.font, L.fs))) + padX : nw;
-            d.text(ox + L.nx + wBox + 4, ly, L.idTxt, "F-Reg", 7, GREY);
+            // the number sits beside the last name line, or on its own small line below it
+            const ix = L.idBelow ? ox + L.nx : ox + L.nx + wBox + 4;
+            const iy = L.idBelow ? ly - L.idStep : ly;
+            d.text(ix, iy, L.idTxt, "F-Reg", 7, GREY);
             if (it.marker) {
-              const mx = ox + L.nx + wBox + 4 + sw(L.idTxt, "F-Reg", 7) + 7;
-              d.circle(mx, ly + 2.6, 4.3, { fill: DGREY });
-              d.text(mx, ly + 0.2, it.marker, "F-Bold", 6.4, WHITE, { anchor: "middle" });
+              const mx = ix + sw(L.idTxt, "F-Reg", 7) + 7;
+              d.circle(mx, iy + 2.6, 4.3, { fill: DGREY });
+              d.text(mx, iy + 0.2, it.marker, "F-Bold", 6.4, WHITE, { anchor: "middle" });
             }
           }
           ly -= NAME_PITCH;
         });
+        ly -= L.idExtra;
         if (L.also.length) ly -= ALSO_GAP; // clear of the black terminus box
         for (const a of L.also) {
           if (a.sub) {
@@ -1395,12 +1438,19 @@
           const f = fmtTime(t[0], t[1]);
           const font = f.pm ? "F-Bold" : "F-Med";
           d.rect(x, yBot, BW, BH, { fill: f.pm ? PM_FILL : WHITE, stroke: INK, sw: 1 });
-          const lw = sw(f.label, font, BFS);
-          const sufW = 0;
-          const tx = x + BW / 2 - sufW / 2;
-          const base = yBot + BH / 2 - BFS * 0.34;
-          d.text(tx, base, f.label, font, BFS, INK, { anchor: "middle" });
+          // A marked trip (runs only on some days of the block) carries its symbol after the
+          // time; the pair is centered and the time shrinks if the two would not fit the box.
+          const mark = t[3] ? ASTERISKS[t[3] - 1] || "*" : "";
+          let tfs = BFS;
+          const markW = (s) => (mark ? sw(mark, "F-Bold", s * 0.8) + 1.2 : 0);
+          while (mark && tfs > 7 && sw(f.label, font, tfs) + markW(tfs) > BW - 7) tfs -= 0.5;
+          const lw = sw(f.label, font, tfs);
+          const mw = markW(tfs);
+          const tx = x + BW / 2 - mw / 2;
+          const base = yBot + BH / 2 - tfs * 0.34;
+          d.text(tx, base, f.label, font, tfs, INK, { anchor: "middle" });
           if (t[2]) d.line(tx - lw / 2, base - 2.4, tx + lw / 2, base - 2.4, { stroke: INK, sw: 1.1 });
+          if (mark) d.text(tx + lw / 2 + 1.2, base + tfs * 0.3, mark, "F-Bold", tfs * 0.8, INK);
         });
         const rws = Math.ceil(b.times.length / COLS) || 1;
         y -= rws * BH + (rws - 1) * GAP;

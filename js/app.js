@@ -288,8 +288,8 @@
     p.set("route", names.join(","));
     if (!mergeEl.checked) p.set("merge", "0");
     if (!noSchoolEl.checked) p.set("school", "1");
-    if (letterEl.checked) p.set("letter", "1");
-    if (plainEl.checked) p.set("plain", "1");
+    if (!letterEl.checked) p.set("letter", "0");
+    if (!plainEl.checked) p.set("plain", "0");
     if (textEl.checked) p.set("text", "1");
     if (bwEl.checked) p.set("bw", "1");
     history.replaceState(null, "", "?" + p.toString());
@@ -304,8 +304,8 @@
     if (!stop) return showErr(`No timetable data for stop ${code}.`);
     if (params.get("merge") === "0") mergeEl.checked = false;
     if (params.get("school") === "1") noSchoolEl.checked = false;
-    if (params.get("letter") === "1") letterEl.checked = true;
-    if (params.get("plain") === "1") plainEl.checked = true;
+    if (params.get("letter") === "0") letterEl.checked = false;
+    if (params.get("plain") === "0") plainEl.checked = false;
     if (params.get("text") === "1") textEl.checked = true;
     if (params.get("bw") === "1") bwEl.checked = true;
     showPicked(stop);

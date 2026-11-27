@@ -209,6 +209,186 @@
       return out;
     }
 
+    // ---- "X" + "X via Y" headings that run the same stops from here --------------------
+    const WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const DAY_KEY_DAYS = {
+      weekday: ["Mon", "Tue", "Wed", "Thu", "Fri"],
+      weekend: ["Sat", "Sun"],
+      frisat: ["Fri", "Sat"],
+      mt: ["Mon", "Tue", "Wed", "Thu"],
+      sunthu: ["Sun", "Mon", "Tue", "Wed", "Thu"],
+      daily: WEEK,
+      fri: ["Fri"],
+      sat: ["Sat"],
+      sun: ["Sun"],
+    };
+    const DAY_CLUSTER_KEY = {
+      "Mon-Tue-Wed-Thu-Fri": "weekday",
+      "Sat-Sun": "weekend",
+      "Fri-Sat": "frisat",
+      "Mon-Tue-Wed-Thu": "mt",
+      "Mon-Tue-Wed-Thu-Sun": "sunthu",
+      "Mon-Tue-Wed-Thu-Fri-Sat-Sun": "daily",
+    };
+    const colDays = (col) => (col.days && col.days.length ? col.days.slice() : (DAY_KEY_DAYS[col.key] || []).slice());
+    const depKey = (d) => `${d.hh}:${d.mm}`;
+    const depOrder = (a, b) => minuteOf(a.hh, a.mm) - minuteOf(b.hh, b.mm);
+
+    /**
+     * Union two sets of timetable columns day by day, then give every run of days with an
+     * identical list of times one column (so Monday\u2013Thursday and Friday stay separate when
+     * the via trips differ on Friday).
+     */
+    function mergeColumnsByDay(aCols, bCols) {
+      const byDay = new Map();
+      for (const col of [...aCols, ...bCols]) {
+        for (const day of colDays(col)) {
+          const m = byDay.get(day) || new Map();
+          for (const d of col.deps || []) {
+            const prev = m.get(depKey(d));
+            m.set(depKey(d), prev ? Object.assign({}, prev, d, { noteStar: !!(prev.noteStar || d.noteStar) }) : Object.assign({}, d));
+          }
+          byDay.set(day, m);
+        }
+      }
+      const buckets = [];
+      for (const day of WEEK) {
+        const m = byDay.get(day);
+        if (!m) continue;
+        const deps = [...m.values()].sort(depOrder);
+        const sig = deps.map((d) => `${depKey(d)}${d.noteStar ? "*" : ""}`).join(",");
+        const hit = buckets.find((b) => b.sig === sig);
+        if (hit) hit.days.push(day);
+        else buckets.push({ days: [day], deps, sig });
+      }
+      return buckets.map((b) => {
+        const seq = b.days.join("-");
+        const key = DAY_CLUSTER_KEY[seq] || (b.days.length === 1 ? b.days[0].toLowerCase() : seq.toLowerCase());
+        const full = { Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };
+        const label = DAY_LABEL[key] || `${full[b.days[0]]}\u2013${full[b.days[b.days.length - 1]]}`;
+        return { key, label, deps: b.deps, days: b.days };
+      });
+    }
+
+    const FULL_DAY = { Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };
+    const SYMBOLS = ["*", "\u00a7"];
+    /** Routes that get one weekday and one weekend block, with asterisks on the odd trips. */
+    const NEAR_DAY_ROUTES = new Set(["80", "D", "G", "J"]);
+
+    /**
+     * Blocks for days whose timetables are nearly the same (Monday\u2013Thursday and Friday, or
+     * Saturday and Sunday) become one: the few trips that do not run every day get an
+     * asterisk, and a note under the block says on which days they run.
+     */
+    function collapseNearDays(cols, groups) {
+      const out = [];
+      const taken = new Set();
+      for (const grp of groups) {
+        const mine = cols.filter((c) => c.days.length && c.days.every((d) => grp.includes(d)));
+        if (mine.length < 2) continue;
+        const days = WEEK.filter((d) => mine.some((c) => c.days.includes(d)));
+        // which days each time runs on
+        const runs = new Map();
+        for (const c of mine) {
+          for (const dep of c.deps) {
+            const k = depKey(dep);
+            const r = runs.get(k) || { dep, days: [] };
+            r.days.push(...c.days);
+            if (dep.noteStar) r.dep = Object.assign({}, r.dep, { noteStar: true });
+            runs.set(k, r);
+          }
+        }
+        const all = [...runs.values()];
+        const extras = all.filter((r) => r.days.length < days.length);
+        const setsOf = [...new Set(extras.map((r) => WEEK.filter((d) => r.days.includes(d)).join("-")))];
+        if (extras.length * 4 > all.length || extras.length > Math.max(4, all.length * 0.12) || setsOf.length > SYMBOLS.length) continue;
+        mine.forEach((c) => taken.add(c));
+        const notes = [];
+        const deps = all
+          .map((r) => {
+            const dep = Object.assign({}, r.dep);
+            if (r.days.length < days.length) {
+              const idx = setsOf.indexOf(WEEK.filter((d) => r.days.includes(d)).join("-"));
+              dep.sym = idx + 1;
+            }
+            return dep;
+          })
+          .sort(depOrder);
+        setsOf.forEach((s, idx) => {
+          const ds = s.split("-");
+          const night = deps.filter((d) => d.sym === idx + 1).every((d) => afterMidnight(d.hh));
+          const text =
+            ds.length === 1
+              ? `${FULL_DAY[ds[0]]}${night ? " nights" : "s"}`
+              : `${FULL_DAY[ds[0]]}\u2013${FULL_DAY[ds[ds.length - 1]]}${night ? " nights" : ""}`;
+          notes.push(`${SYMBOLS[idx]} Runs on ${text} only.`);
+        });
+        const seq = days.join("-");
+        const key = DAY_CLUSTER_KEY[seq] || seq.toLowerCase();
+        out.push({
+          key,
+          label: DAY_LABEL[key] || `${FULL_DAY[days[0]]}\u2013${FULL_DAY[days[days.length - 1]]}`,
+          deps,
+          days,
+          notes,
+        });
+      }
+      return [...cols.filter((c) => !taken.has(c)), ...out];
+    }
+
+    /**
+     * At a stop where "X" and "X via Y" both leave and then run exactly the same stops, the two
+     * timetables become one: X's, with the via trips underlined and a note naming the headsign.
+     */
+    function foldViaHeadings(headings, insts) {
+      const dest = (h) => normDest(h.board && h.board.dest);
+      const remaining = (route, d) => {
+        const set = new Set(
+          insts
+            .filter((i) => low(i.r) === low(route) && normDest(i.board && i.board.dest) === d)
+            .map((i) => i.remaining.join(","))
+        );
+        return set.size === 1 ? [...set][0] : null;
+      };
+      const used = new Set();
+      const out = [];
+      headings.forEach((keep, i) => {
+        if (used.has(i)) return;
+        let merged = keep;
+        headings.forEach((fold, j) => {
+          if (j === i || used.has(j)) return;
+          if (low(fold.routeShortName) !== low(keep.routeShortName)) return;
+          if ((fold.routeDirection || "") !== (keep.routeDirection || "")) return;
+          if (String((fold.board && fold.board.code) || "") !== String((keep.board && keep.board.code) || "")) return;
+          if (!dest(fold).startsWith(dest(keep) + " VIA ")) return;
+          const ra = remaining(keep.routeShortName, dest(keep));
+          if (ra == null || ra !== remaining(fold.routeShortName, dest(fold))) return;
+          used.add(j);
+          const starred = (fold.columns || []).map((c) => ({
+            key: c.key,
+            days: c.days,
+            deps: (c.deps || []).map((d) => Object.assign({}, d, { noteStar: true })),
+          }));
+          merged = Object.assign({}, merged, {
+            columns: mergeColumnsByDay(merged.columns || [], starred),
+            destNote: { type: "headsign", headsign: fold.board.dest },
+          });
+        });
+        out.push(merged);
+      });
+      // routes whose weekday (Mon\u2013Thu/Fri) and weekend (Sat/Sun) blocks differ by a few late trips
+      return out.map((h) =>
+        NEAR_DAY_ROUTES.has(String(h.routeShortName).toUpperCase())
+          ? Object.assign({}, h, {
+              columns: collapseNearDays(h.columns || [], [
+                ["Mon", "Tue", "Wed", "Thu", "Fri"],
+                ["Sat", "Sun"],
+              ]),
+            })
+          : h
+      );
+    }
+
     function blockLabel(col, deps) {
       let label = DAY_LABEL[col.key] || String(col.label || col.key || "").replace(/:$/, "");
       if (deps.length && deps.every((d) => afterMidnight(d.hh)) && !/night/i.test(label)) label += " Night";
@@ -264,7 +444,8 @@
           const deps = [...c.deps.values()].sort((a, b) => minuteOf(a.hh, a.mm) - minuteOf(b.hh, b.mm));
           return {
             label: blockLabel(c.col, deps),
-            times: deps.map((x) => [Number(x.hh), Number(x.mm) || 0, x.noteStar ? 1 : 0]),
+            times: deps.map((x) => [Number(x.hh), Number(x.mm) || 0, x.noteStar ? 1 : 0, x.sym || 0]),
+            notes: c.col.notes || [],
           };
         });
         // "Main" destination = the one with the most weekday trips.
@@ -304,7 +485,7 @@
         return `${note.lead || ""}${note.stopName || ""} (Stop #${code}).`.trim();
       }
       if (note.type === "headsign" && note.headsign) {
-        return `Underlined trips follow the same route but operate under the headsign ${note.headsign}.`;
+        return `Underlined trips follow the same route but operate under the headsign ${S.prettyDest ? S.prettyDest(note.headsign) : note.headsign}.`;
       }
       return "";
     }
@@ -362,7 +543,9 @@
             xferCodes: row.xferCodes || codes,
           };
           if (row.departMinutes != null && S.displayMinute(row.departMinutes) !== it.min) {
-            it.note = `Layover: departs ${S.displayMinute(row.departMinutes)}\u2019 from here`;
+            // how long the bus waits here: "(Layover: departs 15\u2019 later)"
+            const wait = Math.round(Number(row.departMinutes) - Number(row.minutes));
+            it.note = wait > 0 ? `(Layover: departs ${wait}\u2019 later)` : "(Layover)";
           }
           items.push(it);
           byCode.set(String(row.code), it);
@@ -594,7 +777,10 @@
             firstDir: first.dirId,
           };
           const heading = S.routeHeading(code, rows, ctx.served.geo || {}, "");
-          const headings = headingsFor(ctx, code, new Set(routeNamesHere.map(low)), poster, groups);
+          const headings = foldViaHeadings(
+            headingsFor(ctx, code, new Set(routeNamesHere.map(low)), poster, groups),
+            insts
+          );
           const dests = buildDests(ctx, headings, heading ? heading[0].toUpperCase() + heading.slice(1) : "");
           if (!dests.length) {
             // No timetable matched (rare data gap): fall back to the stop list's own signs.
@@ -682,6 +868,8 @@
         }
       }
       if (!posters.length) throw new Error(`No remaining stops from ${code} on the selected route.`);
+      // lettered routes before numbered ones (C, then 38); a route's own order is kept
+      posters.sort((a, b) => S.compareBoardCodes(a.routes[0].label, b.routes[0].label));
       return mergeSchoolPosters(posters);
     }
 
