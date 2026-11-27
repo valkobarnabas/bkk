@@ -802,6 +802,7 @@
             }
           }
           const { items, markers } = buildItems(ctx, poster, opts);
+          putSpurAfterEastSprings(items);
 
           // How far each destination goes: the last stop where its sign ends.
           for (const dd of dests) {
@@ -871,6 +872,36 @@
       // lettered routes before numbered ones (C, then 38); a route's own order is kept
       posters.sort((a, b) => S.compareBoardCodes(a.routes[0].label, b.routes[0].label));
       return mergeSchoolPosters(posters);
+    }
+
+    /**
+     * The A2's High Crossing spur runs after East Springs, but its (late night / early morning)
+     * trips are quicker, so by minutes it can sort ahead of East Springs. Put it after East
+     * Springs, with East Springs' minute on its first two stops and one more on the next two.
+     */
+    function putSpurAfterEastSprings(items) {
+      const isSpur = (it) => it.lane && /^High Crossing/i.test(it.name);
+      for (let i = 0; i < items.length; i++) {
+        if (!items[i].spurStart || !isSpur(items[i])) continue;
+        let e = i;
+        while (e + 1 < items.length && items[e + 1].lane && !items[e + 1].spurStart) e++;
+        const es = items[e + 1];
+        if (!es || es.lane || !/^East Springs$/i.test(es.name)) continue;
+        const block = items.slice(i, e + 1);
+        if (!block.every(isSpur)) continue;
+        // only the outbound direction (E Springs first, Cross Hill last); the other way round the
+        // spur really does come before East Springs
+        if (!/at E Springs$/i.test(block[0].name)) continue;
+        items.splice(i, block.length + 1, es, ...block);
+        let prev = es.min;
+        block.forEach((it, k) => {
+          it.min = Math.max(it.min, es.min + (k >= 2 ? 1 : 0), prev);
+          prev = it.min;
+        });
+        // whatever follows the spur is not earlier than its last stop
+        for (let k = i + 1 + block.length; k < items.length && items[k].min < prev; k++) items[k].min = prev;
+        break;
+      }
     }
 
     /** School runs (one code each) that serve the same stops become one poster. */
